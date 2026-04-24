@@ -1,0 +1,16 @@
+kind = "web"
+previewPath = "/"
+title = "MLB Lab"
+version = "1.0.0"
+id = "mlb_lab_artifact_001"
+
+[[services]]
+localPort = 5000
+name = "MLB Lab"
+paths = ["/"]
+
+[services.env]
+PORT = "5000"
+
+[services.development]
+run = "python app.py"
