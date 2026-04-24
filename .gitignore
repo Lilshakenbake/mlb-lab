@@ -47,3 +47,59 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+develop-eggs/
+downloads/
+eggs/
+lib/python*/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+uv.lock
+pyproject.toml
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Trained model artifacts
+models/
+*.pkl
+*.joblib
+
+# OS / editor
+*.swp
+*~
+
+# Replit-internal (keep local, don't push)
+.replit
+.replit-artifact/
+attached_assets/
+artifacts/
+main.py
+replit.md
+
