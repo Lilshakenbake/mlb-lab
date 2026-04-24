@@ -28,12 +28,13 @@ app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
 APP_PASSWORD = os.getenv("APP_PASSWORD", "mlb123")
 
 BOARD_CACHE = {}
-BOARD_CACHE_TTL_SECONDS = 1800  # 30 minutes
+BOARD_CACHE_TTL_SECONDS = int(os.getenv("BOARD_CACHE_TTL", "1800"))  # 30 min default
 
 PLAYS_CACHE = {"ts": 0, "data": [], "computing": False}
-PLAYS_CACHE_TTL_SECONDS = 600  # 10 minutes
-PLAYS_GAME_CONCURRENCY = 6
-PLAYS_LIMIT = 12
+PLAYS_CACHE_TTL_SECONDS = int(os.getenv("PLAYS_CACHE_TTL", "600"))  # 10 min default
+PLAYS_GAME_CONCURRENCY = int(os.getenv("PLAYS_GAME_CONCURRENCY", "2"))
+PLAYS_LIMIT = int(os.getenv("PLAYS_LIMIT", "12"))
+BOARD_INNER_CONCURRENCY = int(os.getenv("BOARD_INNER_CONCURRENCY", "3"))
 _PLAYS_LOCK = threading.Lock()
 
 STAT_LABELS = {
@@ -125,7 +126,7 @@ def build_game_boards(game):
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=BOARD_INNER_CONCURRENCY) as pool:
         f_weather = pool.submit(get_game_weather, game)
         f_away_hitters = pool.submit(get_projected_top_hitters, game["away_team_id"], 3)
         f_home_hitters = pool.submit(get_projected_top_hitters, game["home_team_id"], 3)

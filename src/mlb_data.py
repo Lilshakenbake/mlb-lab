@@ -7,6 +7,13 @@ from pybaseball import statcast_batter, statcast_pitcher, playerid_lookup
 
 try:
     import pybaseball
+    _pyb_cache_dir = os.getenv("PYBASEBALL_CACHE_DIR")
+    if _pyb_cache_dir:
+        try:
+            os.makedirs(_pyb_cache_dir, exist_ok=True)
+            pybaseball.cache.config.cache_directory = _pyb_cache_dir
+        except Exception:
+            pass
     pybaseball.cache.enable()
 except Exception:
     pass
