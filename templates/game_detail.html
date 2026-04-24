@@ -107,6 +107,34 @@
             color: #cbd5e1;
             border: 1px solid #475569;
         }
+
+        .sort-bar {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin: 14px 0 4px;
+        }
+        .sort-bar a {
+            padding: 7px 14px;
+            border-radius: 999px;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: bold;
+            color: #cbd5e1;
+            background: #1e293b;
+            border: 1px solid #334155;
+        }
+        .sort-bar a.active {
+            background: #2563eb;
+            color: white;
+            border-color: #2563eb;
+        }
+        .sort-bar .label {
+            color: #94a3b8;
+            font-size: 12px;
+            align-self: center;
+            margin-right: 4px;
+        }
     </style>
 </head>
 <body>
@@ -136,6 +164,12 @@
                     Using projected top hitters ranked by recent performance and probability.
                 </div>
             {% endif %}
+
+            <div class="sort-bar">
+                <span class="label">Sort props by:</span>
+                <a href="?sort=prob" class="{% if sort_mode != 'edge' %}active{% endif %}">Win %</a>
+                <a href="?sort=edge" class="{% if sort_mode == 'edge' %}active{% endif %}">Edge</a>
+            </div>
 
             <hr>
 

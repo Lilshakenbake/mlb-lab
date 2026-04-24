@@ -1,8 +1,9 @@
 import os
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
-from flask import Flask, render_template, redirect, url_for, session, request
+from flask import Flask, render_template, redirect, url_for, session, request, jsonify
 
 from src.mlb_data import (
     get_todays_games,
@@ -27,6 +28,20 @@ APP_PASSWORD = os.getenv("APP_PASSWORD", "mlb123")
 
 BOARD_CACHE = {}
 BOARD_CACHE_TTL_SECONDS = 1800  # 30 minutes
+
+PLAYS_CACHE = {"ts": 0, "data": [], "computing": False}
+PLAYS_CACHE_TTL_SECONDS = 600  # 10 minutes
+PLAYS_GAME_CONCURRENCY = 6
+PLAYS_LIMIT = 12
+_PLAYS_LOCK = threading.Lock()
+
+STAT_LABELS = {
+    "hits": "Hits",
+    "total_bases": "Total Bases",
+    "home_runs": "Home Runs",
+    "rbis": "RBIs",
+    "pitcher_strikeouts": "Strikeouts",
+}
 
 
 def login_required(f):
@@ -227,11 +242,144 @@ def get_cached_game_boards(game):
     return data
 
 
+def _build_plays_for_game(game):
+    try:
+        boards = get_cached_game_boards(game)
+    except Exception:
+        return []
+
+    matchup = f"{game['away_team']} @ {game['home_team']}"
+    out = []
+
+    for stat_type_key, prop_list in (
+        ("hits", boards.get("top_hits", [])),
+        ("total_bases", boards.get("top_total_bases", [])),
+        ("home_runs", boards.get("top_home_runs", [])),
+        ("rbis", boards.get("top_rbis", [])),
+    ):
+        for prop in prop_list:
+            if prop.get("pick") == "PASS":
+                continue
+            out.append({
+                "kind": "hitter",
+                "headline": prop.get("player", ""),
+                "stat_label": STAT_LABELS.get(stat_type_key, stat_type_key),
+                "pick": prop.get("pick"),
+                "line": prop.get("line"),
+                "projection": prop.get("projection"),
+                "edge": prop.get("edge"),
+                "probability": prop.get("probability", 0),
+                "model_used": prop.get("model_used", False),
+                "matchup": matchup,
+                "game_pk": game.get("gamePk"),
+            })
+
+    for prop in boards.get("top_strikeouts", []):
+        if prop.get("pick") == "PASS":
+            continue
+        out.append({
+            "kind": "pitcher",
+            "headline": prop.get("pitcher", ""),
+            "stat_label": "Strikeouts",
+            "pick": prop.get("pick"),
+            "line": prop.get("line"),
+            "projection": prop.get("projection"),
+            "edge": prop.get("edge"),
+            "probability": prop.get("probability", 0),
+            "model_used": prop.get("model_used", False),
+            "matchup": matchup,
+            "game_pk": game.get("gamePk"),
+        })
+
+    spread = boards.get("spread_lean") or {}
+    if spread.get("ml_pick") and spread.get("ml_probability", 0) >= 55:
+        out.append({
+            "kind": "moneyline",
+            "headline": spread["ml_pick"],
+            "stat_label": "Moneyline",
+            "pick": "ML",
+            "line": None,
+            "projection": None,
+            "edge": spread.get("margin"),
+            "probability": spread.get("ml_probability", 0),
+            "model_used": False,
+            "matchup": matchup,
+            "game_pk": game.get("gamePk"),
+        })
+    if spread.get("run_line_pick") and spread.get("run_line_probability", 0) >= 55:
+        out.append({
+            "kind": "runline",
+            "headline": spread["run_line_pick"],
+            "stat_label": "Run Line",
+            "pick": "RL",
+            "line": None,
+            "projection": None,
+            "edge": spread.get("margin"),
+            "probability": spread.get("run_line_probability", 0),
+            "model_used": False,
+            "matchup": matchup,
+            "game_pk": game.get("gamePk"),
+        })
+
+    return out
+
+
+def _refresh_plays_blocking():
+    try:
+        games = get_todays_games()
+    except Exception:
+        with _PLAYS_LOCK:
+            PLAYS_CACHE["computing"] = False
+        return
+
+    all_plays = []
+    with ThreadPoolExecutor(max_workers=PLAYS_GAME_CONCURRENCY) as pool:
+        futures = [pool.submit(_build_plays_for_game, g) for g in games]
+        for fut in as_completed(futures):
+            try:
+                all_plays.extend(fut.result())
+            except Exception:
+                continue
+
+    all_plays.sort(key=lambda p: p.get("probability", 0), reverse=True)
+    with _PLAYS_LOCK:
+        PLAYS_CACHE["ts"] = time.time()
+        PLAYS_CACHE["data"] = all_plays[:PLAYS_LIMIT]
+        PLAYS_CACHE["computing"] = False
+
+
+def get_plays_of_day_snapshot():
+    """Return what we have right now, kicking off a background refresh if stale."""
+    now = time.time()
+    with _PLAYS_LOCK:
+        fresh = PLAYS_CACHE["data"] and now - PLAYS_CACHE["ts"] < PLAYS_CACHE_TTL_SECONDS
+        already_running = PLAYS_CACHE["computing"]
+        data = list(PLAYS_CACHE["data"])
+        ts = PLAYS_CACHE["ts"]
+        if not fresh and not already_running:
+            PLAYS_CACHE["computing"] = True
+            t = threading.Thread(target=_refresh_plays_blocking, daemon=True)
+            t.start()
+            already_running = True
+
+    return {
+        "plays": data,
+        "computing": already_running and not fresh,
+        "ts": ts,
+    }
+
+
 @app.route("/", methods=["GET"])
 @login_required
 def home():
     games = get_todays_games()
     return render_template("index.html", games=games, best_plays=[])
+
+
+@app.route("/api/plays-of-day", methods=["GET"])
+@login_required
+def api_plays_of_day():
+    return jsonify(get_plays_of_day_snapshot())
 
 
 @app.route("/game/<int:game_pk>")
@@ -242,6 +390,10 @@ def game_detail(game_pk):
 
     if not game:
         return render_template("game_detail.html", error="Game not found", game=None)
+
+    sort_mode = request.args.get("sort", "prob")
+    if sort_mode not in ("prob", "edge"):
+        sort_mode = "prob"
 
     try:
         boards = get_cached_game_boards(game)
@@ -266,19 +418,28 @@ def game_detail(game_pk):
             "projected_mode": True,
         }
 
+    if sort_mode == "edge":
+        sort_key = lambda p: abs(p.get("edge", 0) or 0)
+    else:
+        sort_key = lambda p: p.get("probability", 0) or 0
+
+    def _sort(items):
+        return sorted(items or [], key=sort_key, reverse=True)
+
     return render_template(
         "game_detail.html",
         game=game,
         error=None,
-        top_hits=boards["top_hits"],
-        top_home_runs=boards["top_home_runs"],
-        top_total_bases=boards["top_total_bases"],
-        top_rbis=boards["top_rbis"],
-        top_strikeouts=boards["top_strikeouts"],
+        top_hits=_sort(boards["top_hits"]),
+        top_home_runs=_sort(boards["top_home_runs"]),
+        top_total_bases=_sort(boards["top_total_bases"]),
+        top_rbis=_sort(boards["top_rbis"]),
+        top_strikeouts=_sort(boards["top_strikeouts"]),
         spread_lean=boards["spread_lean"],
         weather=boards["weather"],
         lineup_confirmed=boards["lineup_confirmed"],
         projected_mode=boards["projected_mode"],
+        sort_mode=sort_mode,
     )
 
 

@@ -88,6 +88,39 @@
             text-align: center;
             color: #94a3b8;
         }
+
+        .play-pill {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: bold;
+            letter-spacing: 0.04em;
+            padding: 3px 8px;
+            border-radius: 999px;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        .pill-stat { background:#1e3a8a; color:#dbeafe; border:1px solid #3b82f6; }
+        .pill-over  { background:#14532d; color:#bbf7d0; border:1px solid #22c55e; }
+        .pill-under { background:#7f1d1d; color:#fecaca; border:1px solid #ef4444; }
+        .pill-ml    { background:#3f1d72; color:#ddd6fe; border:1px solid #8b5cf6; }
+        .pill-rl    { background:#3f1d72; color:#ddd6fe; border:1px solid #8b5cf6; }
+        .pill-model { background:#14532d; color:#bbf7d0; border:1px solid #22c55e; }
+        .prob-big {
+            font-size: 26px;
+            font-weight: bold;
+            color: #34d399;
+            margin-top: 6px;
+        }
+        .matchup-line {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 4px;
+        }
+        .play-card {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
     </style>
 </head>
 <body>
@@ -100,41 +133,14 @@
     <h1>MLB Lab</h1>
     <p class="sub">Projected top hitters, pitcher props, moneyline, and run line</p>
 
-    {% if best_plays %}
-        <h2>🔥 Best Plays Today</h2>
-        <div class="games-grid">
-            {% for play in best_plays %}
-                <div class="card">
-                    {% if play.player %}
-                        <div class="matchup">{{ play.player }}</div>
-                        <div class="detail">{{ play.stat_type|replace("_", " ")|title }}</div>
-                    {% elif play.pitcher %}
-                        <div class="matchup">{{ play.pitcher }}</div>
-                        <div class="detail">Pitcher Strikeouts</div>
-                    {% else %}
-                        <div class="matchup">{{ play.name }}</div>
-                        <div class="detail">
-                            {% if play.type == "moneyline" %}
-                                Moneyline
-                            {% elif play.type == "runline" %}
-                                Run Line
-                            {% else %}
-                                Best Play
-                            {% endif %}
-                        </div>
-                    {% endif %}
+    <h2>Plays of the Day</h2>
+    <p class="sub">Highest win-probability picks across the entire slate</p>
 
-                    <div class="detail"><strong>Win %:</strong> {{ play.probability }}%</div>
+    <div id="plays-of-day" class="games-grid">
+        <div class="card empty" id="plays-loading">Loading top plays…</div>
+    </div>
 
-                    {% if play.edge is defined %}
-                        <div class="detail"><strong>Edge:</strong> {{ play.edge }}</div>
-                    {% endif %}
-                </div>
-            {% endfor %}
-        </div>
-
-        <hr>
-    {% endif %}
+    <hr>
 
     <h2>Today’s Slate</h2>
 
@@ -156,5 +162,67 @@
     {% endif %}
 
 </div>
+
+<script>
+(function () {
+    const grid = document.getElementById("plays-of-day");
+    if (!grid) return;
+
+    const escape = (s) => String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    const pickPill = (pick) => {
+        if (pick === "OVER") return '<span class="play-pill pill-over">OVER</span>';
+        if (pick === "UNDER") return '<span class="play-pill pill-under">UNDER</span>';
+        if (pick === "ML") return '<span class="play-pill pill-ml">ML</span>';
+        if (pick === "RL") return '<span class="play-pill pill-rl">RUN LINE</span>';
+        return "";
+    };
+
+    const cardHtml = (p) => {
+        const lineBit = (p.line != null)
+            ? `<div class="detail"><strong>Line:</strong> ${escape(p.line)}` +
+              (p.projection != null ? ` &nbsp; <strong>Proj:</strong> ${escape(p.projection)}` : "") +
+              (p.edge != null ? ` &nbsp; <strong>Edge:</strong> ${escape(p.edge)}` : "") +
+              `</div>`
+            : "";
+        const modelTag = p.model_used
+            ? '<span class="play-pill pill-model">MODEL</span>'
+            : "";
+        const link = p.game_pk ? `/game/${p.game_pk}` : "#";
+        return `
+            <a href="${link}" style="text-decoration:none; color:inherit;">
+              <div class="card play-card">
+                <div>
+                  <div class="matchup">${escape(p.headline)}${modelTag}</div>
+                  <div class="detail">
+                    <span class="play-pill pill-stat">${escape(p.stat_label)}</span>
+                    ${pickPill(p.pick)}
+                  </div>
+                  ${lineBit}
+                  <div class="matchup-line">${escape(p.matchup)}</div>
+                </div>
+                <div class="prob-big">${escape(p.probability)}%</div>
+              </div>
+            </a>`;
+    };
+
+    const render = (plays) => {
+        if (!plays || plays.length === 0) {
+            grid.innerHTML = '<div class="card empty">No strong plays surfaced yet.</div>';
+            return;
+        }
+        grid.innerHTML = plays.map(cardHtml).join("");
+    };
+
+    fetch("/api/plays-of-day", { credentials: "same-origin" })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(data => render(data.plays || []))
+        .catch(() => {
+            grid.innerHTML = '<div class="card empty">Could not load top plays. Refresh to retry.</div>';
+        });
+})();
+</script>
+
 </body>
 </html>
