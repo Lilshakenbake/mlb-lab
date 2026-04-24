@@ -13,4 +13,4 @@ paths = ["/"]
 PORT = "5000"
 
 [services.development]
-run = "python app.py"
+run = "cd ../.. && python app.py"
