@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 from flask import Flask, render_template, redirect, url_for, session, request, jsonify
 
+from src import tracker
 from src.mlb_data import (
     get_todays_games,
     get_team_active_hitters,
@@ -380,6 +381,54 @@ def home():
 @login_required
 def api_plays_of_day():
     return jsonify(get_plays_of_day_snapshot())
+
+
+@app.route("/watchlist", methods=["GET"])
+@login_required
+def watchlist():
+    plays = tracker.list_plays()
+    stats = tracker.summary_stats()
+    return render_template("watchlist.html", plays=plays, stats=stats)
+
+
+@app.route("/api/track", methods=["POST"])
+@login_required
+def api_track():
+    payload = request.get_json(silent=True) or {}
+    result = tracker.add_play(payload)
+    if not result.get("ok"):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/settle/<int:play_id>", methods=["POST"])
+@login_required
+def api_settle(play_id):
+    result = request.form.get("result") or (request.get_json(silent=True) or {}).get("result")
+    actual_value = request.form.get("actual_value") or (request.get_json(silent=True) or {}).get("actual_value")
+    notes = request.form.get("notes") or (request.get_json(silent=True) or {}).get("notes")
+    ok = tracker.settle_play(play_id, result, actual_value=actual_value, notes=notes)
+    if request.form:
+        return redirect(url_for("watchlist"))
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/reopen/<int:play_id>", methods=["POST"])
+@login_required
+def api_reopen(play_id):
+    ok = tracker.reopen_play(play_id)
+    if request.form:
+        return redirect(url_for("watchlist"))
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/untrack/<int:play_id>", methods=["POST"])
+@login_required
+def api_untrack(play_id):
+    ok = tracker.delete_play(play_id)
+    if request.form:
+        return redirect(url_for("watchlist"))
+    return jsonify({"ok": ok})
 
 
 @app.route("/game/<int:game_pk>")

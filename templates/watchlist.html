@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watchlist - MLB Lab</title>
+    <style>
+        body { font-family: Arial, sans-serif; background:#0f172a; color:#e2e8f0; margin:0; }
+        .container { max-width: 1240px; margin:0 auto; padding:16px; }
+        h1, h2 { text-align:center; }
+        .sub { text-align:center; color:#94a3b8; margin-top:-4px; margin-bottom:20px; }
+        a.button-link { display:inline-block; padding:8px 14px; background:#2563eb; color:white; border-radius:8px; text-decoration:none; font-weight:bold; }
+        .header-bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+        .stat-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:24px; }
+        .stat-card { background:#1e293b; border-radius:12px; padding:14px; text-align:center; }
+        .stat-label { font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.06em; }
+        .stat-value { font-size:24px; font-weight:bold; margin-top:6px; color:#f8fafc; }
+        .stat-value.good { color:#34d399; }
+        .stat-value.bad { color:#f87171; }
+        .calibration { background:#1e293b; border-radius:12px; padding:14px; margin-bottom:18px; color:#cbd5e1; font-size:14px; text-align:center; }
+        table { width:100%; border-collapse: collapse; background:#1e293b; border-radius:12px; overflow:hidden; }
+        th, td { padding:10px 12px; text-align:left; border-bottom:1px solid #334155; font-size:13px; vertical-align:middle; }
+        th { background:#0b1220; color:#94a3b8; text-transform:uppercase; font-size:11px; letter-spacing:0.05em; }
+        tr:last-child td { border-bottom:0; }
+        tr.pending { background:#1e293b; }
+        tr.win    { background:#0f2b1e; }
+        tr.loss   { background:#2b0f0f; }
+        tr.push   { background:#1f1f1f; }
+        .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:bold; letter-spacing:0.04em; }
+        .pill-over  { background:#14532d; color:#bbf7d0; border:1px solid #22c55e; }
+        .pill-under { background:#7f1d1d; color:#fecaca; border:1px solid #ef4444; }
+        .pill-ml, .pill-rl { background:#3f1d72; color:#ddd6fe; border:1px solid #8b5cf6; }
+        .pill-model { background:#14532d; color:#bbf7d0; border:1px solid #22c55e; margin-left:4px; }
+        .pill-result { padding:3px 10px; }
+        .pill-WIN { background:#14532d; color:#bbf7d0; border:1px solid #22c55e; }
+        .pill-LOSS { background:#7f1d1d; color:#fecaca; border:1px solid #ef4444; }
+        .pill-PUSH { background:#374151; color:#e5e7eb; border:1px solid #6b7280; }
+        .actions form { display:inline; margin:0; }
+        .actions button {
+            background:#1e293b; color:#e2e8f0; border:1px solid #475569; border-radius:6px;
+            padding:5px 10px; font-size:12px; font-weight:bold; cursor:pointer; margin-right:4px;
+        }
+        .actions button.win   { background:#14532d; border-color:#22c55e; color:#bbf7d0; }
+        .actions button.loss  { background:#7f1d1d; border-color:#ef4444; color:#fecaca; }
+        .actions button.push  { background:#374151; border-color:#6b7280; }
+        .actions button.delete{ background:#1f2937; border-color:#475569; color:#f87171; }
+        .actions button.reopen{ background:#1f2937; border-color:#475569; color:#93c5fd; }
+        .empty { text-align:center; color:#94a3b8; padding:30px; }
+        @media (max-width: 720px) {
+            .hide-sm { display:none; }
+            th, td { padding:8px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header-bar">
+        <a href="/logout" style="color:white;">Logout</a>
+        <a class="button-link" href="/">Back to Slate</a>
+    </div>
+
+    <h1>Watchlist</h1>
+    <p class="sub">Track picks and measure real win rate vs. predicted</p>
+
+    <div class="stat-grid">
+        <div class="stat-card">
+            <div class="stat-label">Total Tracked</div>
+            <div class="stat-value">{{ stats.total }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Pending</div>
+            <div class="stat-value">{{ stats.pending }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Win / Loss / Push</div>
+            <div class="stat-value">{{ stats.wins }} / {{ stats.losses }} / {{ stats.pushes }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Actual Win %</div>
+            <div class="stat-value {% if stats.win_rate is not none and stats.win_rate >= 55 %}good{% elif stats.win_rate is not none and stats.win_rate < 50 %}bad{% endif %}">
+                {{ "%.1f"|format(stats.win_rate) ~ "%" if stats.win_rate is not none else "—" }}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Avg Predicted %</div>
+            <div class="stat-value">{{ "%.1f"|format(stats.avg_pred_prob) ~ "%" if stats.avg_pred_prob is not none else "—" }}</div>
+        </div>
+    </div>
+
+    {% if stats.win_rate is not none and stats.avg_pred_prob is not none %}
+        {% set delta = stats.win_rate - stats.avg_pred_prob %}
+        <div class="calibration">
+            Model calibration:
+            actual <strong>{{ "%.1f"|format(stats.win_rate) }}%</strong>
+            vs. predicted <strong>{{ "%.1f"|format(stats.avg_pred_prob) }}%</strong>
+            ({{ "+%.1f"|format(delta) if delta >= 0 else "%.1f"|format(delta) }} pts).
+            {% if stats.model_win_rate is not none %}
+                MODEL-only picks: <strong>{{ stats.model_wins }}-{{ stats.model_losses }}-{{ stats.model_pushes }}</strong>
+                ({{ "%.1f"|format(stats.model_win_rate) }}% win rate).
+            {% endif %}
+        </div>
+    {% endif %}
+
+    {% if plays %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Pick</th>
+                    <th class="hide-sm">Matchup</th>
+                    <th>Line</th>
+                    <th>Pred %</th>
+                    <th class="hide-sm">Actual</th>
+                    <th>Result</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for p in plays %}
+                <tr class="{{ (p.result or 'pending')|lower }}">
+                    <td>{{ p.game_date or '—' }}</td>
+                    <td>
+                        <strong>{{ p.headline }}</strong>
+                        {% if p.model_used %}<span class="pill pill-model">MODEL</span>{% endif %}
+                        <br>
+                        <span style="color:#94a3b8; font-size:11px;">{{ p.stat_label }}</span>
+                        {% if p.pick == "OVER" %}<span class="pill pill-over">OVER</span>
+                        {% elif p.pick == "UNDER" %}<span class="pill pill-under">UNDER</span>
+                        {% elif p.pick == "ML" %}<span class="pill pill-ml">ML</span>
+                        {% elif p.pick == "RL" %}<span class="pill pill-rl">RL</span>
+                        {% endif %}
+                    </td>
+                    <td class="hide-sm" style="color:#94a3b8;">{{ p.matchup or '—' }}</td>
+                    <td>
+                        {% if p.line is not none %}{{ p.line }}{% else %}—{% endif %}
+                        {% if p.projection is not none %}<br><span style="color:#94a3b8; font-size:11px;">proj {{ p.projection }}</span>{% endif %}
+                    </td>
+                    <td>{{ p.probability }}%</td>
+                    <td class="hide-sm">{% if p.actual_value is not none %}{{ p.actual_value }}{% else %}—{% endif %}</td>
+                    <td>
+                        {% if p.result %}
+                            <span class="pill pill-result pill-{{ p.result }}">{{ p.result }}</span>
+                        {% else %}
+                            <span style="color:#94a3b8;">Pending</span>
+                        {% endif %}
+                    </td>
+                    <td class="actions">
+                        {% if not p.result %}
+                            <form method="post" action="/api/settle/{{ p.id }}">
+                                <input type="hidden" name="result" value="WIN">
+                                <button type="submit" class="win" title="Mark as Win">W</button>
+                            </form>
+                            <form method="post" action="/api/settle/{{ p.id }}">
+                                <input type="hidden" name="result" value="LOSS">
+                                <button type="submit" class="loss" title="Mark as Loss">L</button>
+                            </form>
+                            <form method="post" action="/api/settle/{{ p.id }}">
+                                <input type="hidden" name="result" value="PUSH">
+                                <button type="submit" class="push" title="Mark as Push">P</button>
+                            </form>
+                        {% else %}
+                            <form method="post" action="/api/reopen/{{ p.id }}">
+                                <button type="submit" class="reopen" title="Reopen pick">↺</button>
+                            </form>
+                        {% endif %}
+                        <form method="post" action="/api/untrack/{{ p.id }}" onsubmit="return confirm('Remove this pick?');">
+                            <button type="submit" class="delete" title="Remove pick">✕</button>
+                        </form>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="empty">No tracked picks yet. Hit "Track" on any play from the home page or a game page to start.</p>
+    {% endif %}
+</div>
+</body>
+</html>

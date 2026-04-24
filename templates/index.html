@@ -121,12 +121,29 @@
             flex-direction: column;
             justify-content: space-between;
         }
+        .track-btn {
+            margin-top: 10px;
+            padding: 7px 12px;
+            border-radius: 8px;
+            border: 1px solid #475569;
+            background: #1e293b;
+            color: #93c5fd;
+            font-weight: bold;
+            font-size: 12px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .track-btn:hover { background:#1f3a5f; }
+        .track-btn.tracked {
+            background: #14532d; color:#bbf7d0; border-color:#22c55e; cursor: default;
+        }
     </style>
 </head>
 <body>
 <div class="container">
 
-    <div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+    <div style="display:flex; justify-content:flex-end; gap:14px; margin-bottom:8px;">
+        <a href="/watchlist" style="color:#93c5fd; font-weight:bold;">Watchlist</a>
         <a href="/logout" style="color:white;">Logout</a>
     </div>
 
@@ -179,7 +196,7 @@
         return "";
     };
 
-    const cardHtml = (p) => {
+    const cardHtml = (p, idx) => {
         const lineBit = (p.line != null)
             ? `<div class="detail"><strong>Line:</strong> ${escape(p.line)}` +
               (p.projection != null ? ` &nbsp; <strong>Proj:</strong> ${escape(p.projection)}` : "") +
@@ -191,8 +208,8 @@
             : "";
         const link = p.game_pk ? `/game/${p.game_pk}` : "#";
         return `
-            <a href="${link}" style="text-decoration:none; color:inherit;">
-              <div class="card play-card">
+            <div class="card play-card">
+              <a href="${link}" style="text-decoration:none; color:inherit;">
                 <div>
                   <div class="matchup">${escape(p.headline)}${modelTag}</div>
                   <div class="detail">
@@ -203,24 +220,74 @@
                   <div class="matchup-line">${escape(p.matchup)}</div>
                 </div>
                 <div class="prob-big">${escape(p.probability)}%</div>
-              </div>
-            </a>`;
+              </a>
+              <button class="track-btn" data-idx="${idx}">+ Track</button>
+            </div>`;
+    };
+
+    let lastPlays = [];
+
+    const wireTrackButtons = () => {
+        grid.querySelectorAll(".track-btn").forEach(btn => {
+            btn.addEventListener("click", async (ev) => {
+                ev.preventDefault();
+                if (btn.classList.contains("tracked")) return;
+                const idx = parseInt(btn.dataset.idx, 10);
+                const play = lastPlays[idx];
+                if (!play) return;
+                btn.disabled = true;
+                btn.textContent = "Saving…";
+                try {
+                    const resp = await fetch("/api/track", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        credentials: "same-origin",
+                        body: JSON.stringify(play),
+                    });
+                    const data = await resp.json();
+                    if (data.ok) {
+                        btn.classList.add("tracked");
+                        btn.textContent = data.duplicate ? "Already tracked" : "Tracked ✓";
+                    } else {
+                        btn.textContent = "Failed — retry";
+                        btn.disabled = false;
+                    }
+                } catch (e) {
+                    btn.textContent = "Failed — retry";
+                    btn.disabled = false;
+                }
+            });
+        });
     };
 
     const render = (plays) => {
+        lastPlays = plays || [];
         if (!plays || plays.length === 0) {
             grid.innerHTML = '<div class="card empty">No strong plays surfaced yet.</div>';
             return;
         }
-        grid.innerHTML = plays.map(cardHtml).join("");
+        grid.innerHTML = plays.map((p, i) => cardHtml(p, i)).join("");
+        wireTrackButtons();
     };
 
-    fetch("/api/plays-of-day", { credentials: "same-origin" })
-        .then(r => r.ok ? r.json() : Promise.reject(r.status))
-        .then(data => render(data.plays || []))
-        .catch(() => {
-            grid.innerHTML = '<div class="card empty">Could not load top plays. Refresh to retry.</div>';
-        });
+    const loadPlays = () => {
+        fetch("/api/plays-of-day", { credentials: "same-origin" })
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(data => {
+                render(data.plays || []);
+                if (data.computing && (!data.plays || data.plays.length === 0)) {
+                    grid.innerHTML = '<div class="card empty">Computing top plays… this can take a minute on a cold start. Refreshing automatically.</div>';
+                    setTimeout(loadPlays, 8000);
+                } else if (data.computing) {
+                    setTimeout(loadPlays, 15000);
+                }
+            })
+            .catch(() => {
+                grid.innerHTML = '<div class="card empty">Could not load top plays. Refresh to retry.</div>';
+            });
+    };
+
+    loadPlays();
 })();
 </script>
 

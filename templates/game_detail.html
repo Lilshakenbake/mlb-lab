@@ -135,14 +135,47 @@
             align-self: center;
             margin-right: 4px;
         }
+
+        .track-btn {
+            margin-top: 10px;
+            padding: 7px 12px;
+            border-radius: 8px;
+            border: 1px solid #475569;
+            background: #0b1220;
+            color: #93c5fd;
+            font-weight: bold;
+            font-size: 12px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .track-btn:hover { background:#1f3a5f; }
+        .track-btn.tracked {
+            background: #14532d; color:#bbf7d0; border-color:#22c55e; cursor: default;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-            <a href="/logout" style="color:white;">Logout</a>
+            <div style="display:flex; gap:14px; align-items:center;">
+                <a href="/logout" style="color:white;">Logout</a>
+                <a href="/watchlist" style="color:#93c5fd; font-weight:bold;">Watchlist</a>
+            </div>
             <a class="button-link" href="/" style="width:auto;">Back to Slate</a>
         </div>
+
+        {% macro track_button(kind, headline, stat_label, pick, line, projection, edge, probability, model_used) -%}
+            <button class="track-btn"
+                data-kind="{{ kind }}"
+                data-headline="{{ headline }}"
+                data-stat-label="{{ stat_label }}"
+                data-pick="{{ pick or '' }}"
+                data-line="{{ line if line is not none else '' }}"
+                data-projection="{{ projection if projection is not none else '' }}"
+                data-edge="{{ edge if edge is not none else '' }}"
+                data-probability="{{ probability if probability is not none else 0 }}"
+                data-model-used="{{ '1' if model_used else '0' }}">+ Track</button>
+        {%- endmacro %}
 
         {% if error %}
             <h2>{{ error }}</h2>
@@ -181,6 +214,7 @@
                     <div class="detail"><strong>Projected Margin:</strong> {{ spread_lean.margin }}</div>
                     <div class="detail"><strong>Confidence:</strong> {{ spread_lean.confidence }}</div>
                     <div class="status">{{ spread_lean.note }}</div>
+                    {{ track_button("moneyline", spread_lean.ml_pick, "Moneyline", "ML", None, None, spread_lean.margin, spread_lean.ml_probability, false) }}
                 </div>
 
                 <div class="card">
@@ -189,6 +223,7 @@
                     <div class="detail"><strong>Projected Margin:</strong> {{ spread_lean.margin }}</div>
                     <div class="detail"><strong>Confidence:</strong> {{ spread_lean.confidence }}</div>
                     <div class="status">{{ spread_lean.note }}</div>
+                    {{ track_button("runline", spread_lean.run_line_pick, "Run Line", "RL", None, None, spread_lean.margin, spread_lean.run_line_probability, false) }}
                 </div>
             </div>
 
@@ -207,6 +242,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Hits", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -229,6 +265,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Home Runs", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -251,6 +288,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Total Bases", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -273,6 +311,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "RBIs", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -295,6 +334,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {% if prop.pick != "PASS" %}{{ track_button("pitcher", prop.pitcher, "Strikeouts", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -303,5 +343,55 @@
             {% endif %}
         {% endif %}
     </div>
+
+    <script>
+    (function () {
+        const matchup = {{ ((game.away_team ~ ' @ ' ~ game.home_team) if game else '')|tojson }};
+        const gamePk  = {{ (game.gamePk if game else 'null')|tojson }};
+
+        document.querySelectorAll(".track-btn").forEach(btn => {
+            btn.addEventListener("click", async (ev) => {
+                ev.preventDefault();
+                if (btn.classList.contains("tracked")) return;
+                const ds = btn.dataset;
+                const num = (v) => (v === "" || v == null) ? null : Number(v);
+                const payload = {
+                    kind: ds.kind,
+                    headline: ds.headline,
+                    stat_label: ds.statLabel,
+                    pick: ds.pick || null,
+                    line: num(ds.line),
+                    projection: num(ds.projection),
+                    edge: num(ds.edge),
+                    probability: num(ds.probability) || 0,
+                    model_used: ds.modelUsed === "1",
+                    matchup: matchup,
+                    game_pk: gamePk,
+                };
+                btn.disabled = true;
+                btn.textContent = "Saving…";
+                try {
+                    const resp = await fetch("/api/track", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        credentials: "same-origin",
+                        body: JSON.stringify(payload),
+                    });
+                    const data = await resp.json();
+                    if (data.ok) {
+                        btn.classList.add("tracked");
+                        btn.textContent = data.duplicate ? "Already tracked" : "Tracked ✓";
+                    } else {
+                        btn.textContent = "Failed — retry";
+                        btn.disabled = false;
+                    }
+                } catch (e) {
+                    btn.textContent = "Failed — retry";
+                    btn.disabled = false;
+                }
+            });
+        });
+    })();
+    </script>
 </body>
 </html>
