@@ -1,15 +1,34 @@
+import os
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pybaseball import statcast_batter, statcast_pitcher, playerid_lookup
 
+try:
+    import pybaseball
+    pybaseball.cache.enable()
+except Exception:
+    pass
+
+from src import cache as _cache
+
 BASE_URL = "https://statsapi.mlb.com/api/v1"
 
+# In-process memo (avoids re-reading disk inside one request)
 BatterProfileCache = {}
 PitcherProfileCache = {}
 GameHittersCache = {}
 WeatherCache = {}
+PlayerIdCache = {}
+
+# TTLs (seconds). Player stats only change once a day after games end, so
+# 12h is plenty. Schedule/lineups/weather rotate faster.
+SCHEDULE_TTL = 5 * 60
+LINEUP_TTL = 15 * 60
+WEATHER_TTL = 60 * 60
+PROFILE_TTL = 12 * 60 * 60
+ROSTER_TTL = 6 * 60 * 60
 
 STADIUMS = {
     "Arizona Diamondbacks": {"lat": 33.4453, "lon": -112.0667, "indoor": True, "park": "Chase Field"},
@@ -60,15 +79,35 @@ def _split_name(full_name):
 
 
 def _lookup_player_id(full_name):
+    if full_name in PlayerIdCache:
+        return PlayerIdCache[full_name]
+
+    cached = _cache.get("player_id", full_name, ttl_seconds=30 * 24 * 3600)
+    if cached is not None:
+        PlayerIdCache[full_name] = (cached.get("id"), cached.get("error"))
+        return PlayerIdCache[full_name]
+
     first, last = _split_name(full_name)
     if not first or not last:
-        return None, "Enter full name (first and last)"
+        result = (None, "Enter full name (first and last)")
+        PlayerIdCache[full_name] = result
+        return result
 
-    players = playerid_lookup(last, first)
+    try:
+        players = playerid_lookup(last, first)
+    except Exception as e:
+        return None, f"Player lookup failed: {e}"
+
     if players.empty:
-        return None, "Player not found"
+        result = (None, "Player not found")
+        PlayerIdCache[full_name] = result
+        _cache.put("player_id", full_name, {"id": None, "error": "Player not found"})
+        return result
 
-    return players.iloc[0]["key_mlbam"], None
+    pid = int(players.iloc[0]["key_mlbam"])
+    PlayerIdCache[full_name] = (pid, None)
+    _cache.put("player_id", full_name, {"id": pid, "error": None})
+    return pid, None
 
 
 from zoneinfo import ZoneInfo  # add this at the top of the file if not already there
@@ -76,6 +115,10 @@ from zoneinfo import ZoneInfo  # add this at the top of the file if not already 
 def get_todays_games():
     eastern_now = datetime.now(ZoneInfo("America/New_York"))
     today = eastern_now.strftime("%Y-%m-%d")
+
+    cached = _cache.get("schedule", today, SCHEDULE_TTL)
+    if cached is not None:
+        return cached
 
     url = f"{BASE_URL}/schedule"
     params = {
@@ -108,12 +151,18 @@ def get_todays_games():
             })
 
     games.sort(key=lambda g: g.get("game_time", ""))
+    _cache.put("schedule", today, games)
     return games
 
 def get_confirmed_starting_hitters(game_pk, side):
     cache_key = f"{game_pk}_{side}"
     if cache_key in GameHittersCache:
         return GameHittersCache[cache_key]
+
+    disk = _cache.get("lineup", cache_key, LINEUP_TTL)
+    if disk is not None:
+        GameHittersCache[cache_key] = disk
+        return disk
 
     try:
         url = f"{BASE_URL}/game/{game_pk}/feed/live"
@@ -139,6 +188,7 @@ def get_confirmed_starting_hitters(game_pk, side):
         names = [name for _, name in hitters]
 
         GameHittersCache[cache_key] = names
+        _cache.put("lineup", cache_key, names)
         return names
 
     except Exception:
@@ -147,6 +197,11 @@ def get_confirmed_starting_hitters(game_pk, side):
 
 
 def get_team_active_hitters(team_id):
+    cache_key = str(team_id)
+    disk = _cache.get("roster", cache_key, ROSTER_TTL)
+    if disk is not None:
+        return disk
+
     try:
         url = f"{BASE_URL}/teams/{team_id}/roster"
         params = {"rosterType": "active"}
@@ -161,6 +216,7 @@ def get_team_active_hitters(team_id):
             if position != "P":
                 hitters.append(row["person"]["fullName"])
 
+        _cache.put("roster", cache_key, hitters)
         return hitters
 
     except Exception:
@@ -211,6 +267,11 @@ def get_last5_hitter_profile(player_name):
     if player_name in BatterProfileCache:
         return BatterProfileCache[player_name], None
 
+    disk = _cache.get("hitter_profile", player_name, PROFILE_TTL)
+    if disk is not None:
+        BatterProfileCache[player_name] = disk
+        return disk, None
+
     try:
         df, error = _get_batter_statcast(player_name)
         if error:
@@ -255,6 +316,7 @@ def get_last5_hitter_profile(player_name):
         }
 
         BatterProfileCache[player_name] = profile
+        _cache.put("hitter_profile", player_name, profile)
         return profile, None
 
     except Exception as e:
@@ -264,6 +326,11 @@ def get_last5_hitter_profile(player_name):
 def get_last5_pitcher_profile(pitcher_name):
     if pitcher_name in PitcherProfileCache:
         return PitcherProfileCache[pitcher_name], None
+
+    disk = _cache.get("pitcher_profile", pitcher_name, PROFILE_TTL)
+    if disk is not None:
+        PitcherProfileCache[pitcher_name] = disk
+        return disk, None
 
     try:
         df, error = _get_pitcher_statcast(pitcher_name)
@@ -290,6 +357,7 @@ def get_last5_pitcher_profile(pitcher_name):
         }
 
         PitcherProfileCache[pitcher_name] = profile
+        _cache.put("pitcher_profile", pitcher_name, profile)
         return profile, None
 
     except Exception as e:
@@ -303,6 +371,11 @@ def get_game_weather(game):
 
     if cache_key in WeatherCache:
         return WeatherCache[cache_key]
+
+    disk = _cache.get("weather", cache_key, WEATHER_TTL)
+    if disk is not None:
+        WeatherCache[cache_key] = disk
+        return disk
 
     stadium = STADIUMS.get(home_team)
     if not stadium:
@@ -327,6 +400,7 @@ def get_game_weather(game):
             "weather_note": "Indoor / roof-closed environment",
         }
         WeatherCache[cache_key] = result
+        _cache.put("weather", cache_key, result)
         return result
 
     try:
@@ -364,6 +438,7 @@ def get_game_weather(game):
             "weather_note": f"Outdoor weather loaded for {stadium['park']}",
         }
         WeatherCache[cache_key] = result
+        _cache.put("weather", cache_key, result)
         return result
 
     except Exception:

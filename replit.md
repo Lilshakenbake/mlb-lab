@@ -39,3 +39,10 @@ Provides MLB game predictions (hitter props, pitcher strikeouts, spread leans) u
   Without trained models the app falls back to the original heuristic projections in `src/predict.py`.
 - Inference layer: `src/model.py` (loads `.joblib` bundles, exposes
   `hitter_hits`, `hitter_total_bases`, `pitcher_strikeouts`, `over_probability`).
+- Performance: `src/cache.py` writes a disk-backed JSON cache to
+  `data_cache/` (gitignored). TTLs: schedule 5m, lineup 15m, weather 1h,
+  player profile 12h, roster 6h, player-id 30d. `pybaseball.cache.enable()`
+  also caches statcast HTTP responses on disk.
+- Per-game work runs in a thread pool: weather + both team rosters/profiles
+  + both pitcher profiles in parallel. Override the cache directory with
+  `MLB_CACHE_DIR` env var if Render gives you a persistent disk mount.

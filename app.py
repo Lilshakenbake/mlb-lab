@@ -1,5 +1,6 @@
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 from flask import Flask, render_template, redirect, url_for, session, request
 
@@ -10,11 +11,15 @@ from src.mlb_data import (
     get_last5_pitcher_profile,
     get_game_weather,
 )
+
 from src.predict import (
     build_hitter_prop,
     build_pitcher_k_prop,
     build_spread_lean,
 )
+
+PROJECTED_ROSTER_SCAN_LIMIT = 10
+PROFILE_FETCH_WORKERS = 8
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
@@ -53,27 +58,30 @@ def logout():
     return redirect(url_for("login"))
 
 
+def _fetch_hitter_profile_safe(name):
+    try:
+        profile, err = get_last5_hitter_profile(name)
+        if err or not profile:
+            return name, None
+        return name, profile
+    except Exception:
+        return name, None
+
+
 def get_projected_top_hitters(team_id, limit=3):
-    hitters = get_team_active_hitters(team_id)
+    hitters = get_team_active_hitters(team_id)[:PROJECTED_ROSTER_SCAN_LIMIT]
+    if not hitters:
+        return []
+
     scored = []
-
-    for hitter_name in hitters:
-        try:
-            hitter_profile, err = get_last5_hitter_profile(hitter_name)
-            if err:
+    with ThreadPoolExecutor(max_workers=PROFILE_FETCH_WORKERS) as pool:
+        futures = [pool.submit(_fetch_hitter_profile_safe, name) for name in hitters]
+        for fut in as_completed(futures):
+            name, profile = fut.result()
+            if not profile or profile.get("games_used", 0) < 3:
                 continue
-
-            if hitter_profile["games_used"] < 3:
-                continue
-
-            score = (
-                hitter_profile["hits_avg"] * 0.9
-                + hitter_profile["tb_avg"] * 1.1
-            )
-
-            scored.append((score, hitter_name, hitter_profile))
-        except Exception:
-            continue
+            score = profile["hits_avg"] * 0.9 + profile["tb_avg"] * 1.1
+            scored.append((score, name, profile))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored[:limit]
@@ -84,35 +92,39 @@ def build_game_boards(game):
     top_total_bases = []
     top_strikeouts = []
 
-    weather = get_game_weather(game)
+    away_pitcher_name = game.get("away_pitcher", "").strip()
+    home_pitcher_name = game.get("home_pitcher", "").strip()
 
-    # projected-only mode, but lighter
-    away_hitters = get_projected_top_hitters(game["away_team_id"], limit=3)
-    home_hitters = get_projected_top_hitters(game["home_team_id"], limit=3)
+    # Run weather, both team rosters+profiles, and both pitcher lookups
+    # concurrently. Each of these used to block sequentially on slow
+    # Baseball Savant scrapes.
+    def _safe_pitcher(name):
+        if not name or name == "TBD":
+            return None
+        try:
+            profile, _ = get_last5_pitcher_profile(name)
+            return profile
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        f_weather = pool.submit(get_game_weather, game)
+        f_away_hitters = pool.submit(get_projected_top_hitters, game["away_team_id"], 3)
+        f_home_hitters = pool.submit(get_projected_top_hitters, game["home_team_id"], 3)
+        f_away_pitcher = pool.submit(_safe_pitcher, away_pitcher_name)
+        f_home_pitcher = pool.submit(_safe_pitcher, home_pitcher_name)
+
+        weather = f_weather.result()
+        away_hitters = f_away_hitters.result()
+        home_hitters = f_home_hitters.result()
+        away_pitcher_profile = f_away_pitcher.result()
+        home_pitcher_profile = f_home_pitcher.result()
 
     lineup_confirmed = False
     projected_mode = True
 
     away_team_score = 0.0
     home_team_score = 0.0
-
-    away_pitcher_name = game.get("away_pitcher", "").strip()
-    home_pitcher_name = game.get("home_pitcher", "").strip()
-
-    away_pitcher_profile = None
-    home_pitcher_profile = None
-
-    if away_pitcher_name and away_pitcher_name != "TBD":
-        try:
-            away_pitcher_profile, _ = get_last5_pitcher_profile(away_pitcher_name)
-        except Exception:
-            away_pitcher_profile = None
-
-    if home_pitcher_name and home_pitcher_name != "TBD":
-        try:
-            home_pitcher_profile, _ = get_last5_pitcher_profile(home_pitcher_name)
-        except Exception:
-            home_pitcher_profile = None
 
     if away_pitcher_profile and "strikeouts_avg" in away_pitcher_profile:
         top_strikeouts.append(
