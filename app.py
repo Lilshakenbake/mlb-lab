@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 from flask import Flask, render_template, redirect, url_for, session, request, jsonify
 
-from src import tracker
+from src import tracker, grader
 from src.mlb_data import (
     get_todays_games,
     get_team_active_hitters,
@@ -386,9 +386,25 @@ def api_plays_of_day():
 @app.route("/watchlist", methods=["GET"])
 @login_required
 def watchlist():
+    grade_state = grader.trigger_background_grade(force=False)
     plays = tracker.list_plays()
     stats = tracker.summary_stats()
-    return render_template("watchlist.html", plays=plays, stats=stats)
+    grade_info = {
+        "running": grade_state.get("running"),
+        "last_run_label": grader.humanize_age(grade_state.get("last_run_ts") or 0),
+        "last_result": grade_state.get("last_result"),
+        "just_started": grade_state.get("started"),
+    }
+    return render_template("watchlist.html", plays=plays, stats=stats, grade_info=grade_info)
+
+
+@app.route("/api/grade", methods=["POST"])
+@login_required
+def api_grade():
+    state = grader.trigger_background_grade(force=True)
+    if request.form:
+        return redirect(url_for("watchlist"))
+    return jsonify(state)
 
 
 @app.route("/api/track", methods=["POST"])

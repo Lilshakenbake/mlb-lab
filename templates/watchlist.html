@@ -46,6 +46,24 @@
         .actions button.delete{ background:#1f2937; border-color:#475569; color:#f87171; }
         .actions button.reopen{ background:#1f2937; border-color:#475569; color:#93c5fd; }
         .empty { text-align:center; color:#94a3b8; padding:30px; }
+        .grade-bar {
+            display:flex; align-items:center; justify-content:space-between; gap:12px;
+            background:#0b1220; border:1px solid #1e293b; border-radius:12px;
+            padding:10px 14px; margin-bottom:14px; font-size:13px; color:#cbd5e1;
+            flex-wrap:wrap;
+        }
+        .grade-bar .status-text { color:#94a3b8; }
+        .grade-bar .status-text strong { color:#e2e8f0; }
+        .grade-bar form { margin:0; }
+        .grade-bar button {
+            background:#2563eb; color:white; border:0; padding:7px 14px;
+            border-radius:8px; font-weight:bold; cursor:pointer; font-size:13px;
+        }
+        .grade-bar button:disabled { background:#475569; cursor:not-allowed; }
+        .auto-tag {
+            display:inline-block; margin-left:6px; font-size:10px; color:#94a3b8;
+            border:1px solid #334155; padding:1px 6px; border-radius:999px; vertical-align:middle;
+        }
         @media (max-width: 720px) {
             .hide-sm { display:none; }
             th, td { padding:8px; }
@@ -85,6 +103,29 @@
             <div class="stat-label">Avg Predicted %</div>
             <div class="stat-value">{{ "%.1f"|format(stats.avg_pred_prob) ~ "%" if stats.avg_pred_prob is not none else "—" }}</div>
         </div>
+    </div>
+
+    <div class="grade-bar">
+        <div class="status-text">
+            Auto-grader:
+            {% if grade_info.running %}
+                <strong>running…</strong> refresh in a few seconds.
+            {% else %}
+                last run <strong>{{ grade_info.last_run_label }}</strong>.
+            {% endif %}
+            {% if grade_info.last_result %}
+                {% set lr = grade_info.last_result %}
+                Settled <strong>{{ lr.graded or 0 }}</strong>,
+                {{ lr.skipped_not_final or 0 }} game(s) not final,
+                {{ lr.skipped_no_data or 0 }} unmatched,
+                {{ lr.errors or 0 }} error(s).
+            {% endif %}
+        </div>
+        <form method="post" action="/api/grade">
+            <button type="submit" {% if grade_info.running %}disabled{% endif %}>
+                {% if grade_info.running %}Grading…{% else %}Grade pending now{% endif %}
+            </button>
+        </form>
     </div>
 
     {% if stats.win_rate is not none and stats.avg_pred_prob is not none %}
@@ -140,6 +181,7 @@
                     <td>
                         {% if p.result %}
                             <span class="pill pill-result pill-{{ p.result }}">{{ p.result }}</span>
+                            {% if p.notes == "auto-graded" %}<span class="auto-tag">auto</span>{% endif %}
                         {% else %}
                             <span style="color:#94a3b8;">Pending</span>
                         {% endif %}
