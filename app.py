@@ -90,6 +90,8 @@ def get_projected_top_hitters(team_id, limit=3):
 def build_game_boards(game):
     top_hits = []
     top_total_bases = []
+    top_home_runs = []
+    top_rbis = []
     top_strikeouts = []
 
     away_pitcher_name = game.get("away_pitcher", "").strip()
@@ -148,83 +150,47 @@ def build_game_boards(game):
             )
         )
 
-    for idx, (_, hitter_name, hitter_profile) in enumerate(away_hitters):
-        try:
-            pitcher_hits_allowed = home_pitcher_profile["hits_allowed_avg"] if home_pitcher_profile else None
+    def _hitter_props(hitters, opposing_pitcher_name, opposing_profile, side_score):
+        for idx, (_, hitter_name, hitter_profile) in enumerate(hitters):
+            try:
+                pitcher_hits_allowed = (
+                    opposing_profile["hits_allowed_avg"] if opposing_profile else None
+                )
 
-            hit = build_hitter_prop(
-                "hits",
-                hitter_name,
-                home_pitcher_name,
-                0.5,
-                hitter_profile["hits_avg"],
-                pitcher_hits_allowed,
-                idx,
-                weather,
-                hitter_profile=hitter_profile,
-            )
-            tb = build_hitter_prop(
-                "total_bases",
-                hitter_name,
-                home_pitcher_name,
-                1.5,
-                hitter_profile["tb_avg"],
-                pitcher_hits_allowed,
-                idx,
-                weather,
-                hitter_profile=hitter_profile,
-            )
+                props = [
+                    ("hits", 0.5, hitter_profile.get("hits_avg", 0.0), top_hits),
+                    ("total_bases", 1.5, hitter_profile.get("tb_avg", 0.0), top_total_bases),
+                    ("home_runs", 0.5, hitter_profile.get("hr_avg", 0.0), top_home_runs),
+                    ("rbis", 0.5, hitter_profile.get("rbi_avg", 0.0), top_rbis),
+                ]
+                for stat_type, line, base, bucket in props:
+                    prop = build_hitter_prop(
+                        stat_type,
+                        hitter_name,
+                        opposing_pitcher_name,
+                        line,
+                        base,
+                        pitcher_hits_allowed,
+                        idx,
+                        weather,
+                        hitter_profile=hitter_profile,
+                    )
+                    if prop["pick"] != "PASS":
+                        bucket.append(prop)
 
-            if hit["pick"] != "PASS":
-                top_hits.append(hit)
-            if tb["pick"] != "PASS":
-                top_total_bases.append(tb)
+                side_score[0] += (
+                    hitter_profile.get("hits_avg", 0.0) * 0.8
+                    + hitter_profile.get("tb_avg", 0.0) * 1.0
+                )
+            except Exception:
+                continue
 
-            away_team_score += (
-                hitter_profile["hits_avg"] * 0.8
-                + hitter_profile["tb_avg"] * 1.0
-            )
-        except Exception:
-            continue
-
-    for idx, (_, hitter_name, hitter_profile) in enumerate(home_hitters):
-        try:
-            pitcher_hits_allowed = away_pitcher_profile["hits_allowed_avg"] if away_pitcher_profile else None
-
-            hit = build_hitter_prop(
-                "hits",
-                hitter_name,
-                away_pitcher_name,
-                0.5,
-                hitter_profile["hits_avg"],
-                pitcher_hits_allowed,
-                idx,
-                weather,
-                hitter_profile=hitter_profile,
-            )
-            tb = build_hitter_prop(
-                "total_bases",
-                hitter_name,
-                away_pitcher_name,
-                1.5,
-                hitter_profile["tb_avg"],
-                pitcher_hits_allowed,
-                idx,
-                weather,
-                hitter_profile=hitter_profile,
-            )
-
-            if hit["pick"] != "PASS":
-                top_hits.append(hit)
-            if tb["pick"] != "PASS":
-                top_total_bases.append(tb)
-
-            home_team_score += (
-                hitter_profile["hits_avg"] * 0.8
-                + hitter_profile["tb_avg"] * 1.0
-            )
-        except Exception:
-            continue
+    away_box = [away_team_score]
+    home_box = [home_team_score]
+    _hitter_props(away_hitters, home_pitcher_name, home_pitcher_profile, away_box)
+    _hitter_props(home_hitters, away_pitcher_name, away_pitcher_profile, home_box)
+    away_team_score = away_box[0]
+    home_team_score = home_box[0]
 
     spread_lean = build_spread_lean(
         game=game,
@@ -238,6 +204,8 @@ def build_game_boards(game):
     return {
         "top_hits": sorted(top_hits, key=lambda x: x["probability"], reverse=True),
         "top_total_bases": sorted(top_total_bases, key=lambda x: x["probability"], reverse=True),
+        "top_home_runs": sorted(top_home_runs, key=lambda x: x["probability"], reverse=True),
+        "top_rbis": sorted(top_rbis, key=lambda x: x["probability"], reverse=True),
         "top_strikeouts": sorted(top_strikeouts, key=lambda x: x["probability"], reverse=True),
         "spread_lean": spread_lean,
         "weather": weather,
@@ -281,6 +249,8 @@ def game_detail(game_pk):
         boards = {
             "top_hits": [],
             "top_total_bases": [],
+            "top_home_runs": [],
+            "top_rbis": [],
             "top_strikeouts": [],
             "spread_lean": {
                 "ml_pick": "No side available",
@@ -301,9 +271,9 @@ def game_detail(game_pk):
         game=game,
         error=None,
         top_hits=boards["top_hits"],
-        top_home_runs=[],
+        top_home_runs=boards["top_home_runs"],
         top_total_bases=boards["top_total_bases"],
-        top_rbis=[],
+        top_rbis=boards["top_rbis"],
         top_strikeouts=boards["top_strikeouts"],
         spread_lean=boards["spread_lean"],
         weather=boards["weather"],

@@ -103,12 +103,22 @@ def _batter_game_logs(name: str, days: int) -> pd.DataFrame | None:
         + (x == "triple").sum() * 3
         + (x == "home_run").sum() * 4
     )
+    hr = grouped["events"].apply(lambda x: (x == "home_run").sum())
     home_team = grouped["home_team"].first()
+
+    if "rbi" in df.columns:
+        rbi_num = pd.to_numeric(df["rbi"], errors="coerce").fillna(0)
+        rbi = df.assign(_rbi=rbi_num).groupby("game_date")["_rbi"].sum()
+    else:
+        # statcast doesn't always carry rbi -- approximate from hit mix
+        rbi = hits * 0.35 + hr * 0.65 + tb * 0.10
 
     out = pd.DataFrame({
         "game_date": pd.to_datetime(hits.index),
         "hits": hits.values.astype(float),
         "total_bases": tb.values.astype(float),
+        "home_runs": hr.values.astype(float),
+        "rbis": rbi.values.astype(float),
         "home_team_code": home_team.values,
     }).sort_values("game_date").reset_index(drop=True)
     out["player"] = name
@@ -184,11 +194,15 @@ def build_batter_dataset(logs: pd.DataFrame) -> pd.DataFrame:
                 "player": player,
                 "hits_avg_5": float(window["hits"].mean()),
                 "tb_avg_5": float(window["total_bases"].mean()),
+                "hr_avg_5": float(window["home_runs"].mean()),
+                "rbi_avg_5": float(window["rbis"].mean()),
                 "hits_std_5": float(window["hits"].std() or 0.0),
                 "tb_std_5": float(window["total_bases"].std() or 0.0),
                 "indoor": _is_indoor(tgt["home_team_code"]),
                 "target_hits": float(tgt["hits"]),
                 "target_tb": float(tgt["total_bases"]),
+                "target_hr": float(tgt["home_runs"]),
+                "target_rbi": float(tgt["rbis"]),
             })
     return pd.DataFrame(rows)
 
@@ -283,7 +297,10 @@ def main():
         all_batters = pd.concat(batter_frames, ignore_index=True)
         ds = build_batter_dataset(all_batters)
         summary["hitters_used"] = sorted(ds["player"].unique().tolist())
-        feat_cols = ["hits_avg_5", "tb_avg_5", "hits_std_5", "tb_std_5", "indoor"]
+        feat_cols = [
+            "hits_avg_5", "tb_avg_5", "hr_avg_5", "rbi_avg_5",
+            "hits_std_5", "tb_std_5", "indoor",
+        ]
         X = ds[feat_cols]
 
         print("\nFitting hitter_hits model …")
@@ -291,6 +308,12 @@ def main():
 
         print("Fitting hitter_total_bases model …")
         _save(_fit(X, ds["target_tb"], "hitter_total_bases"), "hitter_total_bases.joblib")
+
+        print("Fitting hitter_home_runs model …")
+        _save(_fit(X, ds["target_hr"], "hitter_home_runs"), "hitter_home_runs.joblib")
+
+        print("Fitting hitter_rbis model …")
+        _save(_fit(X, ds["target_rbi"], "hitter_rbis"), "hitter_rbis.joblib")
 
     if pitcher_frames:
         all_pitchers = pd.concat(pitcher_frames, ignore_index=True)

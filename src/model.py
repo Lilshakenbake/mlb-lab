@@ -67,20 +67,52 @@ def _predict(name: str, values: dict) -> Optional[tuple[float, float]]:
         return None
 
 
-def hitter_hits(hits_avg_5, tb_avg_5, hits_std_5=0.0, tb_std_5=0.0, indoor=0):
+def hitter_hits(hits_avg_5, tb_avg_5, hits_std_5=0.0, tb_std_5=0.0, indoor=0,
+                hr_avg_5=0.0, rbi_avg_5=0.0):
     return _predict("hitter_hits", {
         "hits_avg_5": hits_avg_5,
         "tb_avg_5": tb_avg_5,
+        "hr_avg_5": hr_avg_5,
+        "rbi_avg_5": rbi_avg_5,
         "hits_std_5": hits_std_5,
         "tb_std_5": tb_std_5,
         "indoor": indoor,
     })
 
 
-def hitter_total_bases(hits_avg_5, tb_avg_5, hits_std_5=0.0, tb_std_5=0.0, indoor=0):
+def hitter_total_bases(hits_avg_5, tb_avg_5, hits_std_5=0.0, tb_std_5=0.0, indoor=0,
+                       hr_avg_5=0.0, rbi_avg_5=0.0):
     return _predict("hitter_total_bases", {
         "hits_avg_5": hits_avg_5,
         "tb_avg_5": tb_avg_5,
+        "hr_avg_5": hr_avg_5,
+        "rbi_avg_5": rbi_avg_5,
+        "hits_std_5": hits_std_5,
+        "tb_std_5": tb_std_5,
+        "indoor": indoor,
+    })
+
+
+def hitter_home_runs(hits_avg_5, tb_avg_5, hr_avg_5, rbi_avg_5=0.0,
+                     hits_std_5=0.0, tb_std_5=0.0, indoor=0):
+    return _predict("hitter_home_runs", {
+        "hits_avg_5": hits_avg_5,
+        "tb_avg_5": tb_avg_5,
+        "hr_avg_5": hr_avg_5,
+        "rbi_avg_5": rbi_avg_5,
+        "hits_std_5": hits_std_5,
+        "tb_std_5": tb_std_5,
+        "indoor": indoor,
+    })
+
+
+def hitter_rbis(hits_avg_5, tb_avg_5, hr_avg_5, rbi_avg_5,
+                hits_std_5=0.0, tb_std_5=0.0, indoor=0):
+    return _predict("hitter_rbis", {
+        "hits_avg_5": hits_avg_5,
+        "tb_avg_5": tb_avg_5,
+        "hr_avg_5": hr_avg_5,
+        "rbi_avg_5": rbi_avg_5,
         "hits_std_5": hits_std_5,
         "tb_std_5": tb_std_5,
         "indoor": indoor,

@@ -191,11 +191,19 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     model_used = False
     model_std = None
     indoor = 1 if (weather and weather.get("is_indoor")) else 0
-    if hitter_profile and stat_type in ("hits", "total_bases"):
-        fn = _ml.hitter_hits if stat_type == "hits" else _ml.hitter_total_bases
+    if hitter_profile and stat_type in ("hits", "total_bases", "home_runs", "rbis"):
+        fn_map = {
+            "hits": _ml.hitter_hits,
+            "total_bases": _ml.hitter_total_bases,
+            "home_runs": _ml.hitter_home_runs,
+            "rbis": _ml.hitter_rbis,
+        }
+        fn = fn_map[stat_type]
         ml = fn(
             hits_avg_5=hitter_profile.get("hits_avg", base_projection),
             tb_avg_5=hitter_profile.get("tb_avg", base_projection),
+            hr_avg_5=hitter_profile.get("hr_avg", 0.0),
+            rbi_avg_5=hitter_profile.get("rbi_avg", 0.0),
             indoor=indoor,
         )
         if ml is not None:
