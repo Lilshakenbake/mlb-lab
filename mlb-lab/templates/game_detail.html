@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Props - MLB Lab</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 1240px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+
+        h1, h2 {
+            text-align: center;
+        }
+
+        .games-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 14px;
+        }
+
+        .card, .header-card {
+            background: #1e293b;
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+        }
+
+        .matchup {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .detail {
+            margin: 6px 0;
+            color: #cbd5e1;
+            font-size: 14px;
+        }
+
+        .status {
+            margin-top: 10px;
+            font-size: 13px;
+            color: #93c5fd;
+        }
+
+        .warn {
+            margin-top: 16px;
+            padding: 12px;
+            border-radius: 12px;
+            background: #78350f;
+            color: #fde68a;
+        }
+
+        a.button-link {
+            box-sizing: border-box;
+            padding: 12px;
+            border-radius: 10px;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+            background: #2563eb;
+            color: white;
+            font-weight: bold;
+        }
+
+        hr {
+            margin: 32px 0;
+            border: 0;
+            border-top: 1px solid #334155;
+        }
+
+        .section-note {
+            text-align: center;
+            color: #94a3b8;
+            margin-top: -8px;
+            margin-bottom: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <a href="/logout" style="color:white;">Logout</a>
+            <a class="button-link" href="/" style="width:auto;">Back to Slate</a>
+        </div>
+
+        {% if error %}
+            <h2>{{ error }}</h2>
+        {% else %}
+            <div class="header-card">
+                <h1>{{ game.away_team }} @ {{ game.home_team }}</h1>
+                <p class="detail"><strong>Away Pitcher:</strong> {{ game.away_pitcher }}</p>
+                <p class="detail"><strong>Home Pitcher:</strong> {{ game.home_pitcher }}</p>
+                <p class="detail"><strong>Game Time:</strong> {{ game.game_time }}</p>
+                <p class="status">Status: {{ game.status }}</p>
+                <p class="detail"><strong>Weather:</strong> {{ weather.weather_note }}</p>
+                <p class="detail"><strong>Park:</strong> {{ weather.park }}</p>
+                <p class="detail"><strong>Temperature:</strong> {{ weather.temperature }}°F</p>
+                <p class="detail"><strong>Wind:</strong> {{ weather.wind_speed }} mph</p>
+            </div>
+
+            {% if projected_mode %}
+                <div class="warn">
+                    Using projected top hitters ranked by recent performance and probability.
+                </div>
+            {% endif %}
+
+            <hr>
+
+            <h2>Team Side</h2>
+            <div class="games-grid">
+                <div class="card">
+                    <div class="matchup">{{ spread_lean.ml_pick }}</div>
+                    <div class="detail"><strong>Win Probability:</strong> {{ spread_lean.ml_probability }}%</div>
+                    <div class="detail"><strong>Projected Margin:</strong> {{ spread_lean.margin }}</div>
+                    <div class="detail"><strong>Confidence:</strong> {{ spread_lean.confidence }}</div>
+                    <div class="status">{{ spread_lean.note }}</div>
+                </div>
+
+                <div class="card">
+                    <div class="matchup">{{ spread_lean.run_line_pick }}</div>
+                    <div class="detail"><strong>Cover Probability:</strong> {{ spread_lean.run_line_probability }}%</div>
+                    <div class="detail"><strong>Projected Margin:</strong> {{ spread_lean.margin }}</div>
+                    <div class="detail"><strong>Confidence:</strong> {{ spread_lean.confidence }}</div>
+                    <div class="status">{{ spread_lean.note }}</div>
+                </div>
+            </div>
+
+            <hr>
+
+            <h2>Top Hits</h2>
+            <p class="section-note">Projected top hitters ranked by probability</p>
+            {% if top_hits %}
+                <div class="games-grid">
+                    {% for prop in top_hits %}
+                        <div class="card">
+                            <div class="matchup">{{ prop.player }}</div>
+                            <div class="detail"><strong>Projection:</strong> {{ prop.projection }}</div>
+                            <div class="detail"><strong>Line:</strong> {{ prop.line }}</div>
+                            <div class="detail"><strong>Edge:</strong> {{ prop.edge }}</div>
+                            <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
+                            <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
+                            <div class="status">{{ prop.matchup_note }}</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="section-note">No strong hit plays for this game</p>
+            {% endif %}
+
+            <hr>
+
+            <h2>Top Home Runs</h2>
+            <p class="section-note">Projected HR plays ranked by probability</p>
+            {% if top_home_runs %}
+                <div class="games-grid">
+                    {% for prop in top_home_runs %}
+                        <div class="card">
+                            <div class="matchup">{{ prop.player }}</div>
+                            <div class="detail"><strong>Projection:</strong> {{ prop.projection }}</div>
+                            <div class="detail"><strong>Line:</strong> {{ prop.line }}</div>
+                            <div class="detail"><strong>Edge:</strong> {{ prop.edge }}</div>
+                            <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
+                            <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
+                            <div class="status">{{ prop.matchup_note }}</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="section-note">No strong HR plays for this game</p>
+            {% endif %}
+
+            <hr>
+
+            <h2>Top Total Bases</h2>
+            <p class="section-note">Projected total base plays ranked by probability</p>
+            {% if top_total_bases %}
+                <div class="games-grid">
+                    {% for prop in top_total_bases %}
+                        <div class="card">
+                            <div class="matchup">{{ prop.player }}</div>
+                            <div class="detail"><strong>Projection:</strong> {{ prop.projection }}</div>
+                            <div class="detail"><strong>Line:</strong> {{ prop.line }}</div>
+                            <div class="detail"><strong>Edge:</strong> {{ prop.edge }}</div>
+                            <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
+                            <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
+                            <div class="status">{{ prop.matchup_note }}</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="section-note">No strong total base plays for this game</p>
+            {% endif %}
+
+            <hr>
+
+            <h2>Top RBIs</h2>
+            <p class="section-note">Projected RBI plays ranked by probability</p>
+            {% if top_rbis %}
+                <div class="games-grid">
+                    {% for prop in top_rbis %}
+                        <div class="card">
+                            <div class="matchup">{{ prop.player }}</div>
+                            <div class="detail"><strong>Projection:</strong> {{ prop.projection }}</div>
+                            <div class="detail"><strong>Line:</strong> {{ prop.line }}</div>
+                            <div class="detail"><strong>Edge:</strong> {{ prop.edge }}</div>
+                            <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
+                            <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
+                            <div class="status">{{ prop.matchup_note }}</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="section-note">No strong RBI plays for this game</p>
+            {% endif %}
+
+            <hr>
+
+            <h2>Top Pitcher Strikeouts</h2>
+            <p class="section-note">Pitcher K looks for this game</p>
+            {% if top_strikeouts %}
+                <div class="games-grid">
+                    {% for prop in top_strikeouts %}
+                        <div class="card">
+                            <div class="matchup">{{ prop.pitcher }}</div>
+                            <div class="detail"><strong>Projection:</strong> {{ prop.projection }}</div>
+                            <div class="detail"><strong>Line:</strong> {{ prop.line }}</div>
+                            <div class="detail"><strong>Edge:</strong> {{ prop.edge }}</div>
+                            <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
+                            <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
+                            <div class="status">{{ prop.matchup_note }}</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="section-note">No strong strikeout plays for this game</p>
+            {% endif %}
+        {% endif %}
+    </div>
+</body>
+</html>

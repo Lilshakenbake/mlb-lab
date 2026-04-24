@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MLB Lab</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 1240px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+
+        h1, h2 {
+            text-align: center;
+        }
+
+        .sub {
+            text-align: center;
+            color: #94a3b8;
+            margin-top: -4px;
+            margin-bottom: 20px;
+        }
+
+        .games-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 14px;
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+        }
+
+        .matchup {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .detail {
+            font-size: 14px;
+            color: #cbd5e1;
+            margin: 4px 0;
+        }
+
+        .badge {
+            display: inline-block;
+            margin-top: 8px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: bold;
+            background: #78350f;
+            color: #fde68a;
+        }
+
+        a.button-link {
+            display: block;
+            margin-top: 12px;
+            padding: 10px;
+            text-align: center;
+            background: #2563eb;
+            color: white;
+            border-radius: 10px;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        hr {
+            margin: 32px 0;
+            border: 0;
+            border-top: 1px solid #334155;
+        }
+
+        .empty {
+            text-align: center;
+            color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+        <a href="/logout" style="color:white;">Logout</a>
+    </div>
+
+    <h1>MLB Lab</h1>
+    <p class="sub">Projected top hitters, pitcher props, moneyline, and run line</p>
+
+    {% if best_plays %}
+        <h2>🔥 Best Plays Today</h2>
+        <div class="games-grid">
+            {% for play in best_plays %}
+                <div class="card">
+                    {% if play.player %}
+                        <div class="matchup">{{ play.player }}</div>
+                        <div class="detail">{{ play.stat_type|replace("_", " ")|title }}</div>
+                    {% elif play.pitcher %}
+                        <div class="matchup">{{ play.pitcher }}</div>
+                        <div class="detail">Pitcher Strikeouts</div>
+                    {% else %}
+                        <div class="matchup">{{ play.name }}</div>
+                        <div class="detail">
+                            {% if play.type == "moneyline" %}
+                                Moneyline
+                            {% elif play.type == "runline" %}
+                                Run Line
+                            {% else %}
+                                Best Play
+                            {% endif %}
+                        </div>
+                    {% endif %}
+
+                    <div class="detail"><strong>Win %:</strong> {{ play.probability }}%</div>
+
+                    {% if play.edge is defined %}
+                        <div class="detail"><strong>Edge:</strong> {{ play.edge }}</div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+
+        <hr>
+    {% endif %}
+
+    <h2>Today’s Slate</h2>
+
+    {% if games %}
+        <div class="games-grid">
+            {% for game in games %}
+                <div class="card">
+                    <div class="matchup">{{ game.away_team }} @ {{ game.home_team }}</div>
+                    <div class="detail"><strong>Away Pitcher:</strong> {{ game.away_pitcher }}</div>
+                    <div class="detail"><strong>Home Pitcher:</strong> {{ game.home_pitcher }}</div>
+                    <div class="detail"><strong>Status:</strong> {{ game.status }}</div>
+                    <div class="badge">Projected hitters mode</div>
+                    <a class="button-link" href="/game/{{ game.gamePk }}">View Props</a>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty">No games found.</p>
+    {% endif %}
+
+</div>
+</body>
+</html>

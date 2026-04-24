@@ -1,0 +1,6 @@
+flask
+requests
+pybaseball
+gunicorn
+pandas
+numpy
