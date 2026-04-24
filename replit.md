@@ -34,3 +34,8 @@ Provides MLB game predictions (hitter props, pitcher strikeouts, spread leans) u
 - Run via the `MLB Lab` workflow (`python app.py` on port 5000).
 - Login password set via `APP_PASSWORD` env var (defaults to `mlb123`).
 - Session secret via `SECRET_KEY` env var (uses `SESSION_SECRET` not required).
+- Trained models live in `models/` (gitignored). Train them with:
+  `python train_models.py --days 120`.
+  Without trained models the app falls back to the original heuristic projections in `src/predict.py`.
+- Inference layer: `src/model.py` (loads `.joblib` bundles, exposes
+  `hitter_hits`, `hitter_total_bases`, `pitcher_strikeouts`, `over_probability`).

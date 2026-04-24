@@ -1,3 +1,6 @@
+from src import model as _ml
+
+
 def edge_to_probability(stat_type, edge):
     abs_edge = abs(edge)
 
@@ -180,10 +183,25 @@ def _pitcher_adjustment(stat_type, pitcher_hits_allowed):
     return 0.0, "Neutral matchup"
 
 
-def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projection, pitcher_hits_allowed, lineup_index, weather):
+def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projection, pitcher_hits_allowed, lineup_index, weather, hitter_profile=None):
     lineup_boost = _lineup_boost(stat_type, lineup_index)
     weather_boost, weather_note = _weather_adjustment(stat_type, weather)
     pitcher_adjustment, matchup_note = _pitcher_adjustment(stat_type, pitcher_hits_allowed)
+
+    model_used = False
+    model_std = None
+    indoor = 1 if (weather and weather.get("is_indoor")) else 0
+    if hitter_profile and stat_type in ("hits", "total_bases"):
+        fn = _ml.hitter_hits if stat_type == "hits" else _ml.hitter_total_bases
+        ml = fn(
+            hits_avg_5=hitter_profile.get("hits_avg", base_projection),
+            tb_avg_5=hitter_profile.get("tb_avg", base_projection),
+            indoor=indoor,
+        )
+        if ml is not None:
+            ml_proj, model_std = ml
+            base_projection = 0.5 * base_projection + 0.5 * ml_proj
+            model_used = True
 
     projection = base_projection + lineup_boost + weather_boost + pitcher_adjustment
 
@@ -212,7 +230,10 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     else:
         pick = "OVER" if edge > 0 else "UNDER"
 
-    probability = edge_to_probability(stat_type, edge)
+    if model_used and model_std:
+        probability = _ml.over_probability(projection, line, model_std)
+    else:
+        probability = edge_to_probability(stat_type, edge)
 
     return {
         "stat_type": stat_type,
@@ -224,10 +245,11 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         "pick": pick,
         "probability": probability,
         "matchup_note": f"{matchup_note} | {weather_note}",
+        "model_used": model_used,
     }
 
 
-def build_pitcher_k_prop(pitcher_name, line, projection, weather):
+def build_pitcher_k_prop(pitcher_name, line, projection, weather, pitcher_profile=None):
     weather_note = "Weather neutral"
     weather_adjustment = 0.0
 
@@ -240,6 +262,20 @@ def build_pitcher_k_prop(pitcher_name, line, projection, weather):
                 weather_adjustment += 0.15
                 weather_note = "Cool weather slight K boost"
 
+    model_used = False
+    model_std = None
+    indoor = 1 if (weather and weather.get("is_indoor")) else 0
+    if pitcher_profile:
+        ml = _ml.pitcher_strikeouts(
+            k_avg_5=pitcher_profile.get("strikeouts_avg", projection),
+            hits_allowed_avg_5=pitcher_profile.get("hits_allowed_avg", 6.0),
+            indoor=indoor,
+        )
+        if ml is not None:
+            ml_proj, model_std = ml
+            projection = 0.5 * projection + 0.5 * ml_proj
+            model_used = True
+
     adjusted_projection = round(projection + weather_adjustment, 2)
     edge = round(adjusted_projection - line, 2)
 
@@ -248,7 +284,10 @@ def build_pitcher_k_prop(pitcher_name, line, projection, weather):
     else:
         pick = "OVER" if edge > 0 else "UNDER"
 
-    probability = edge_to_probability("pitcher_strikeouts", edge)
+    if model_used and model_std:
+        probability = _ml.over_probability(adjusted_projection, line, model_std)
+    else:
+        probability = edge_to_probability("pitcher_strikeouts", edge)
 
     return {
         "pitcher": pitcher_name,
@@ -258,6 +297,7 @@ def build_pitcher_k_prop(pitcher_name, line, projection, weather):
         "pick": pick,
         "probability": probability,
         "matchup_note": weather_note,
+        "model_used": model_used,
     }
 
 

@@ -121,6 +121,7 @@ def build_game_boards(game):
                 line=5.5,
                 projection=away_pitcher_profile["strikeouts_avg"],
                 weather=weather,
+                pitcher_profile=away_pitcher_profile,
             )
         )
 
@@ -131,6 +132,7 @@ def build_game_boards(game):
                 line=5.5,
                 projection=home_pitcher_profile["strikeouts_avg"],
                 weather=weather,
+                pitcher_profile=home_pitcher_profile,
             )
         )
 
@@ -147,6 +149,7 @@ def build_game_boards(game):
                 pitcher_hits_allowed,
                 idx,
                 weather,
+                hitter_profile=hitter_profile,
             )
             tb = build_hitter_prop(
                 "total_bases",
@@ -157,6 +160,7 @@ def build_game_boards(game):
                 pitcher_hits_allowed,
                 idx,
                 weather,
+                hitter_profile=hitter_profile,
             )
 
             if hit["pick"] != "PASS":
@@ -184,6 +188,7 @@ def build_game_boards(game):
                 pitcher_hits_allowed,
                 idx,
                 weather,
+                hitter_profile=hitter_profile,
             )
             tb = build_hitter_prop(
                 "total_bases",
@@ -194,6 +199,7 @@ def build_game_boards(game):
                 pitcher_hits_allowed,
                 idx,
                 weather,
+                hitter_profile=hitter_profile,
             )
 
             if hit["pick"] != "PASS":

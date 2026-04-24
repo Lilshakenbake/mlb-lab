@@ -4,3 +4,5 @@ pybaseball
 gunicorn
 pandas
 numpy
+joblib
+scikit-learn
