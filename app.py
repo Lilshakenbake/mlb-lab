@@ -166,6 +166,8 @@ def build_game_boards(game):
             )
         )
 
+    park_name = (weather or {}).get("park")
+
     def _hitter_props(hitters, opposing_pitcher_name, opposing_profile, side_score):
         for idx, (_, hitter_name, hitter_profile) in enumerate(hitters):
             try:
@@ -190,6 +192,8 @@ def build_game_boards(game):
                         idx,
                         weather,
                         hitter_profile=hitter_profile,
+                        opp_pitcher_profile=opposing_profile,
+                        park_name=park_name,
                     )
                     if prop["pick"] != "PASS":
                         bucket.append(prop)
@@ -405,6 +409,18 @@ def api_grade():
     if request.form:
         return redirect(url_for("watchlist"))
     return jsonify(state)
+
+
+@app.route("/api/odds/<int:play_id>", methods=["POST"])
+@login_required
+def api_odds(play_id):
+    odds_val = request.form.get("odds") if request.form else None
+    if odds_val is None and request.is_json:
+        odds_val = (request.get_json(silent=True) or {}).get("odds")
+    ok = tracker.update_odds(play_id, odds_val)
+    if request.form:
+        return redirect(url_for("watchlist"))
+    return jsonify({"ok": ok})
 
 
 @app.route("/api/track", methods=["POST"])

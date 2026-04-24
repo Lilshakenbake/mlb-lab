@@ -1,4 +1,70 @@
 from src import model as _ml
+from src.park_factors import get_factor as _get_park_factor
+
+
+def _platoon_factor(stat_type, batter_hand, pitcher_hand):
+    """Multiplicative platoon adjustment. Same-hand matchup hurts hitter,
+    opposite-hand helps. Switch hitters always face opposite hand → small boost."""
+    if not batter_hand or not pitcher_hand:
+        return 1.0
+    bh = batter_hand.upper()
+    ph = pitcher_hand.upper()
+    if bh == "S":
+        same = False  # switch hitter takes the favorable side
+    else:
+        same = (bh == ph)
+
+    if stat_type == "hits":
+        return 0.93 if same else 1.05
+    if stat_type == "total_bases":
+        return 0.91 if same else 1.06
+    if stat_type == "home_runs":
+        return 0.85 if same else 1.10
+    if stat_type == "rbis":
+        return 0.93 if same else 1.05
+    return 1.0
+
+
+def _pitcher_k_damper(stat_type, opp_pitcher_k_avg):
+    """High-K starter suppresses contact-based stats; soft-tossing starter inflates them."""
+    if opp_pitcher_k_avg is None:
+        return 1.0
+    k = float(opp_pitcher_k_avg)
+    if stat_type == "hits":
+        if k >= 8.0: return 0.88
+        if k >= 6.5: return 0.95
+        if k <= 4.0: return 1.08
+        return 1.0
+    if stat_type == "total_bases":
+        if k >= 8.0: return 0.85
+        if k >= 6.5: return 0.94
+        if k <= 4.0: return 1.10
+        return 1.0
+    if stat_type == "home_runs":
+        if k >= 8.0: return 0.93
+        if k <= 4.0: return 1.05
+        return 1.0
+    if stat_type == "rbis":
+        if k >= 8.0: return 0.88
+        if k <= 4.0: return 1.08
+        return 1.0
+    return 1.0
+
+
+def _hot_factor(hot_ratio):
+    """Tiny nudge for players riding a hot/cold streak (last 3 vs window)."""
+    if hot_ratio is None:
+        return 1.0
+    r = float(hot_ratio)
+    if r >= 1.40: return 1.05
+    if r >= 1.20: return 1.03
+    if r <= 0.60: return 0.95
+    if r <= 0.80: return 0.97
+    return 1.0
+
+
+def _clamp_factor(f, lo=0.55, hi=1.55):
+    return max(lo, min(hi, f))
 
 
 def edge_to_probability(stat_type, edge):
@@ -183,7 +249,9 @@ def _pitcher_adjustment(stat_type, pitcher_hits_allowed):
     return 0.0, "Neutral matchup"
 
 
-def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projection, pitcher_hits_allowed, lineup_index, weather, hitter_profile=None):
+def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projection,
+                      pitcher_hits_allowed, lineup_index, weather, hitter_profile=None,
+                      opp_pitcher_profile=None, park_name=None):
     lineup_boost = _lineup_boost(stat_type, lineup_index)
     weather_boost, weather_note = _weather_adjustment(stat_type, weather)
     pitcher_adjustment, matchup_note = _pitcher_adjustment(stat_type, pitcher_hits_allowed)
@@ -211,7 +279,39 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
             base_projection = 0.5 * base_projection + 0.5 * ml_proj
             model_used = True
 
-    projection = base_projection + lineup_boost + weather_boost + pitcher_adjustment
+    # Multiplicative context factors (zero new HTTP — derived from data we already pull).
+    park_key = {"hits": "hits", "total_bases": "tb", "home_runs": "hr", "rbis": "tb"}.get(stat_type, "hits")
+    park_f = _get_park_factor(park_name).get(park_key, 1.0)
+    k_avg = (opp_pitcher_profile or {}).get("strikeouts_avg")
+    pitcher_k_f = _pitcher_k_damper(stat_type, k_avg)
+    platoon_f = _platoon_factor(
+        stat_type,
+        (hitter_profile or {}).get("hand"),
+        (opp_pitcher_profile or {}).get("hand"),
+    )
+    hot_f = _hot_factor((hitter_profile or {}).get("hot_ratio"))
+    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f)
+
+    # Anti double-count: the K damper and the additive pitcher_adjustment both
+    # encode pitcher quality. When the K damper has already pulled the projection
+    # the same direction as the hits-allowed nudge, shrink the additive piece.
+    if pitcher_adjustment != 0 and pitcher_k_f != 1.0:
+        same_dir = (pitcher_k_f < 1.0 and pitcher_adjustment < 0) or (pitcher_k_f > 1.0 and pitcher_adjustment > 0)
+        if same_dir:
+            pitcher_adjustment *= 0.5
+
+    projection = (base_projection * context_factor) + lineup_boost + weather_boost + pitcher_adjustment
+
+    # Build a short why-string so the user can see what moved this pick.
+    factor_bits = []
+    if abs(park_f - 1.0) >= 0.04:
+        factor_bits.append(f"park {park_f - 1:+.0%}")
+    if abs(pitcher_k_f - 1.0) >= 0.04:
+        factor_bits.append(f"opp K {pitcher_k_f - 1:+.0%}")
+    if abs(platoon_f - 1.0) >= 0.04:
+        factor_bits.append(f"platoon {platoon_f - 1:+.0%}")
+    if abs(hot_f - 1.0) >= 0.04:
+        factor_bits.append(f"trend {hot_f - 1:+.0%}")
 
     # stricter penalties for weak starter profiles
     if stat_type == "hits" and base_projection < 0.70:
@@ -243,6 +343,10 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     else:
         probability = edge_to_probability(stat_type, edge)
 
+    note_parts = [matchup_note, weather_note]
+    if factor_bits:
+        note_parts.append(", ".join(factor_bits))
+
     return {
         "stat_type": stat_type,
         "player": player_name,
@@ -252,7 +356,7 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         "edge": edge,
         "pick": pick,
         "probability": probability,
-        "matchup_note": f"{matchup_note} | {weather_note}",
+        "matchup_note": " | ".join(p for p in note_parts if p),
         "model_used": model_used,
     }
 

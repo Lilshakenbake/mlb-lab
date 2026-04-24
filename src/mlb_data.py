@@ -263,6 +263,21 @@ def _get_pitcher_statcast(pitcher_name, days_back=60):
     return df, None
 
 
+def _safe_hand(df, col):
+    """Return the most common L/R/S code in column `col` of df, or None."""
+    if col not in df.columns:
+        return None
+    try:
+        s = df[col].dropna()
+        if s.empty:
+            return None
+        v = s.mode().iloc[0]
+        v = str(v).upper().strip()
+        return v if v in ("L", "R", "S") else None
+    except Exception:
+        return None
+
+
 def get_last5_hitter_profile(player_name):
     if player_name in BatterProfileCache:
         return BatterProfileCache[player_name], None
@@ -279,13 +294,14 @@ def get_last5_hitter_profile(player_name):
 
         grouped = df.groupby("game_date")
 
+        # Bigger window (8 games) cuts single-game noise without any new HTTP.
         hits_by_game = grouped["events"].apply(
             lambda x: x.isin(["single", "double", "triple", "home_run"]).sum()
-        ).tail(5)
+        ).tail(8)
 
         hr_by_game = grouped["events"].apply(
             lambda x: x.isin(["home_run"]).sum()
-        ).tail(5)
+        ).tail(8)
 
         tb_by_game = grouped["events"].apply(
             lambda x: (
@@ -294,24 +310,34 @@ def get_last5_hitter_profile(player_name):
                 + (x == "triple").sum() * 3
                 + (x == "home_run").sum() * 4
             )
-        ).tail(5)
+        ).tail(8)
 
         if "rbi" in df.columns:
             rbi_col = pd.to_numeric(df["rbi"], errors="coerce").fillna(0)
             temp = df.copy()
             temp["rbi_num"] = rbi_col
-            rbi_by_game = temp.groupby("game_date")["rbi_num"].sum().tail(5)
+            rbi_by_game = temp.groupby("game_date")["rbi_num"].sum().tail(8)
         else:
-            rbi_by_game = (hits_by_game * 0.35 + hr_by_game * 0.65 + tb_by_game * 0.10).tail(5)
+            rbi_by_game = (hits_by_game * 0.35 + hr_by_game * 0.65 + tb_by_game * 0.10).tail(8)
 
         if len(hits_by_game) == 0:
             return None, "No recent games found"
+
+        # Hot-streak: last 3 vs overall window. >1 = hot, <1 = cold.
+        last3 = hits_by_game.tail(3)
+        hits_overall = float(hits_by_game.mean()) or 0.0
+        last3_mean = float(last3.mean()) if len(last3) else hits_overall
+        hot_ratio = (last3_mean / hits_overall) if hits_overall > 0 else 1.0
 
         profile = {
             "hits_avg": round(float(hits_by_game.mean()), 2),
             "hr_avg": round(float(hr_by_game.mean()), 2),
             "tb_avg": round(float(tb_by_game.mean()), 2),
             "rbi_avg": round(float(rbi_by_game.mean()), 2),
+            "hits_std": round(float(hits_by_game.std() or 0.0), 2),
+            "tb_std": round(float(tb_by_game.std() or 0.0), 2),
+            "hand": _safe_hand(df, "stand"),  # L/R/S
+            "hot_ratio": round(hot_ratio, 2),
             "games_used": int(len(hits_by_game)),
         }
 
@@ -341,11 +367,11 @@ def get_last5_pitcher_profile(pitcher_name):
 
         hits_allowed_by_game = grouped["events"].apply(
             lambda x: x.isin(["single", "double", "triple", "home_run"]).sum()
-        ).tail(5)
+        ).tail(8)
 
         strikeouts_by_game = grouped["events"].apply(
             lambda x: x.isin(["strikeout", "strikeout_double_play"]).sum()
-        ).tail(5)
+        ).tail(8)
 
         if len(strikeouts_by_game) == 0:
             return None, "No recent pitcher games found"
@@ -353,6 +379,8 @@ def get_last5_pitcher_profile(pitcher_name):
         profile = {
             "hits_allowed_avg": round(float(hits_allowed_by_game.mean()), 2),
             "strikeouts_avg": round(float(strikeouts_by_game.mean()), 2),
+            "k_std": round(float(strikeouts_by_game.std() or 0.0), 2),
+            "hand": _safe_hand(df, "p_throws"),  # L/R
             "games_used": int(len(strikeouts_by_game)),
         }
 

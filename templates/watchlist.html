@@ -64,6 +64,32 @@
             display:inline-block; margin-left:6px; font-size:10px; color:#94a3b8;
             border:1px solid #334155; padding:1px 6px; border-radius:999px; vertical-align:middle;
         }
+        .roi-bar {
+            display:flex; gap:14px; flex-wrap:wrap; margin-bottom:18px;
+            background:linear-gradient(135deg,#0f172a,#0b1220); border:1px solid #1e293b;
+            border-radius:12px; padding:14px 18px;
+        }
+        .roi-bar .roi-cell { min-width:130px; }
+        .roi-bar .roi-label { color:#94a3b8; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+        .roi-bar .roi-value { font-size:22px; font-weight:bold; margin-top:4px; }
+        .roi-bar .roi-value.up { color:#22c55e; }
+        .roi-bar .roi-value.down { color:#ef4444; }
+        .roi-bar .roi-value.flat { color:#cbd5e1; }
+        .market-table { margin-top:18px; }
+        .market-table h3 { margin:0 0 8px 0; color:#cbd5e1; font-size:14px; text-transform:uppercase; letter-spacing:.06em; }
+        .market-table table { font-size:13px; }
+        .odds-input {
+            width:60px; background:#0b1220; border:1px solid #334155;
+            color:#e2e8f0; padding:3px 5px; border-radius:6px; font-size:12px;
+        }
+        .odds-form { display:inline-flex; gap:4px; align-items:center; margin:0; }
+        .odds-form button {
+            background:#1e293b; color:#cbd5e1; border:1px solid #334155;
+            padding:3px 7px; border-radius:6px; font-size:11px; cursor:pointer;
+        }
+        .units-cell { font-weight:bold; }
+        .units-cell.up { color:#22c55e; }
+        .units-cell.down { color:#ef4444; }
         @media (max-width: 720px) {
             .hide-sm { display:none; }
             th, td { padding:8px; }
@@ -128,6 +154,33 @@
         </form>
     </div>
 
+    {% if stats.settled and stats.settled > 0 %}
+        <div class="roi-bar">
+            <div class="roi-cell">
+                <div class="roi-label">Units P/L</div>
+                <div class="roi-value {% if stats.total_units > 0 %}up{% elif stats.total_units < 0 %}down{% else %}flat{% endif %}">
+                    {{ "%+.2f"|format(stats.total_units) }}u
+                </div>
+            </div>
+            <div class="roi-cell">
+                <div class="roi-label">ROI</div>
+                <div class="roi-value {% if stats.roi_pct and stats.roi_pct > 0 %}up{% elif stats.roi_pct and stats.roi_pct < 0 %}down{% else %}flat{% endif %}">
+                    {{ "%+.1f"|format(stats.roi_pct) ~ "%" if stats.roi_pct is not none else "—" }}
+                </div>
+            </div>
+            <div class="roi-cell">
+                <div class="roi-label">Staked</div>
+                <div class="roi-value flat">{{ stats.total_staked }}u</div>
+            </div>
+            <div class="roi-cell">
+                <div class="roi-label">Record</div>
+                <div class="roi-value flat" style="font-size:18px;">
+                    {{ stats.wins }}-{{ stats.losses }}{% if stats.pushes %}-{{ stats.pushes }}{% endif %}
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
     {% if stats.win_rate is not none and stats.avg_pred_prob is not none %}
         {% set delta = stats.win_rate - stats.avg_pred_prob %}
         <div class="calibration">
@@ -151,8 +204,10 @@
                     <th class="hide-sm">Matchup</th>
                     <th>Line</th>
                     <th>Pred %</th>
+                    <th>Odds</th>
                     <th class="hide-sm">Actual</th>
                     <th>Result</th>
+                    <th>Units</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -177,6 +232,17 @@
                         {% if p.projection is not none %}<br><span style="color:#94a3b8; font-size:11px;">proj {{ p.projection }}</span>{% endif %}
                     </td>
                     <td>{{ p.probability }}%</td>
+                    <td>
+                        {% if not p.result %}
+                            <form class="odds-form" method="post" action="/api/odds/{{ p.id }}">
+                                <input class="odds-input" type="number" step="1" name="odds"
+                                       value="{{ p.odds|int if p.odds is not none else -110 }}">
+                                <button type="submit" title="Save odds">✓</button>
+                            </form>
+                        {% else %}
+                            <span style="color:#cbd5e1; font-size:12px;">{{ p.odds|int if p.odds is not none else -110 }}</span>
+                        {% endif %}
+                    </td>
                     <td class="hide-sm">{% if p.actual_value is not none %}{{ p.actual_value }}{% else %}—{% endif %}</td>
                     <td>
                         {% if p.result %}
@@ -184,6 +250,18 @@
                             {% if p.notes == "auto-graded" %}<span class="auto-tag">auto</span>{% endif %}
                         {% else %}
                             <span style="color:#94a3b8;">Pending</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if p.result == "WIN" %}
+                            {% set u = (100.0 / (p.odds|abs)) if (p.odds is not none and p.odds < 0) else ((p.odds / 100.0) if p.odds is not none else 0.909) %}
+                            <span class="units-cell up">{{ "%+.2f"|format(u) }}u</span>
+                        {% elif p.result == "LOSS" %}
+                            <span class="units-cell down">-1.00u</span>
+                        {% elif p.result == "PUSH" %}
+                            <span style="color:#94a3b8;">0.00u</span>
+                        {% else %}
+                            <span style="color:#475569;">—</span>
                         {% endif %}
                     </td>
                     <td class="actions">
@@ -215,6 +293,36 @@
         </table>
     {% else %}
         <p class="empty">No tracked picks yet. Hit "Track" on any play from the home page or a game page to start.</p>
+    {% endif %}
+
+    {% if stats.market_breakdown and stats.market_breakdown|length > 0 %}
+    <div class="market-table">
+        <h3>Performance by market</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Market</th>
+                    <th>Record</th>
+                    <th>Win %</th>
+                    <th>Units</th>
+                    <th>ROI</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for m in stats.market_breakdown %}
+                <tr>
+                    <td><strong>{{ m.market }}</strong></td>
+                    <td>{{ m.wins }}-{{ m.losses }}{% if m.pushes %}-{{ m.pushes }}{% endif %}</td>
+                    <td>{{ "%.1f"|format(m.win_rate) ~ "%" if m.win_rate is not none else "—" }}</td>
+                    <td class="units-cell {% if m.units > 0 %}up{% elif m.units < 0 %}down{% endif %}">
+                        {{ "%+.2f"|format(m.units) }}u
+                    </td>
+                    <td>{{ "%+.1f"|format(m.roi_pct) ~ "%" if m.roi_pct is not none else "—" }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
     {% endif %}
 </div>
 </body>

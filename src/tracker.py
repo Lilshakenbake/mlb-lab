@@ -14,6 +14,31 @@ _INITIALIZED = False
 
 VALID_RESULTS = {"WIN", "LOSS", "PUSH"}
 
+DEFAULT_ODDS = -110
+
+
+def odds_to_profit(american_odds) -> float:
+    """Profit per 1.0u stake on a winning bet at the given American odds.
+    -110 -> +0.909, +130 -> +1.30."""
+    try:
+        o = float(american_odds)
+    except (TypeError, ValueError):
+        o = float(DEFAULT_ODDS)
+    if o == 0:
+        return 0.0
+    if o > 0:
+        return o / 100.0
+    return 100.0 / abs(o)
+
+
+def units_for(result: str, american_odds) -> float:
+    """Units P/L assuming a 1u stake."""
+    if result == "WIN":
+        return round(odds_to_profit(american_odds), 3)
+    if result == "LOSS":
+        return -1.0
+    return 0.0  # PUSH or pending
+
 
 def _ensure_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -63,6 +88,14 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_game_date ON tracked_plays(game_date);
                 """
             )
+            # Lightweight migration: add `odds` column if it doesn't exist yet
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracked_plays)")}
+            if "odds" not in cols:
+                conn.execute(f"ALTER TABLE tracked_plays ADD COLUMN odds REAL DEFAULT {DEFAULT_ODDS}")
+                conn.execute(
+                    "UPDATE tracked_plays SET odds=? WHERE odds IS NULL",
+                    (DEFAULT_ODDS,),
+                )
         _INITIALIZED = True
 
 
@@ -83,6 +116,9 @@ def add_play(payload: dict) -> dict:
     if not headline:
         return {"ok": False, "error": "missing headline"}
 
+    odds_in = _to_float(payload.get("odds"))
+    if odds_in is None:
+        odds_in = float(DEFAULT_ODDS)
     row = {
         "created_at": datetime.utcnow().isoformat(timespec="seconds"),
         "game_pk": payload.get("game_pk"),
@@ -97,6 +133,7 @@ def add_play(payload: dict) -> dict:
         "edge": _to_float(payload.get("edge")),
         "probability": _to_float(payload.get("probability")) or 0.0,
         "model_used": 1 if payload.get("model_used") else 0,
+        "odds": odds_in,
     }
 
     with _connect() as conn:
@@ -122,17 +159,27 @@ def add_play(payload: dict) -> dict:
             """
             INSERT INTO tracked_plays
               (created_at, game_pk, game_date, matchup, kind, headline,
-               stat_label, pick, line, projection, edge, probability, model_used)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               stat_label, pick, line, projection, edge, probability, model_used, odds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["created_at"], row["game_pk"], row["game_date"], row["matchup"],
                 row["kind"], row["headline"], row["stat_label"], row["pick"],
                 row["line"], row["projection"], row["edge"], row["probability"],
-                row["model_used"],
+                row["model_used"], row["odds"],
             ),
         )
         return {"ok": True, "id": cur.lastrowid, "duplicate": False}
+
+
+def update_odds(play_id: int, odds) -> bool:
+    init_db()
+    o = _to_float(odds)
+    if o is None:
+        return False
+    with _connect() as conn:
+        cur = conn.execute("UPDATE tracked_plays SET odds=? WHERE id=?", (o, play_id))
+        return cur.rowcount > 0
 
 
 def list_plays(only_pending: bool = False, limit: int | None = None) -> list[dict]:
@@ -227,6 +274,58 @@ def summary_stats() -> dict:
     model_win_rate = round((model_wins / model_decided) * 100, 1) if model_decided > 0 else None
     avg_pred_model = round(row["avg_pred_prob_model"], 1) if row["avg_pred_prob_model"] is not None else None
 
+    # ----- ROI / units math -----
+    settled_rows = []
+    by_market: dict[str, dict] = {}
+    with _connect() as conn:
+        for r in conn.execute(
+            "SELECT kind, stat_label, result, odds FROM tracked_plays WHERE result IS NOT NULL"
+        ):
+            settled_rows.append(r)
+
+    total_units = 0.0
+    total_staked = 0.0
+    for r in settled_rows:
+        result = r["result"]
+        odds = r["odds"] if r["odds"] is not None else DEFAULT_ODDS
+        u = units_for(result, odds)
+        total_units += u
+        total_staked += 1.0  # 1u flat stake per pick
+
+        # Per-market bucket
+        bucket_key = r["stat_label"] or (r["kind"] or "other").title()
+        b = by_market.setdefault(
+            bucket_key,
+            {"market": bucket_key, "wins": 0, "losses": 0, "pushes": 0,
+             "units": 0.0, "staked": 0.0},
+        )
+        b["units"] += u
+        b["staked"] += 1.0
+        if result == "WIN":
+            b["wins"] += 1
+        elif result == "LOSS":
+            b["losses"] += 1
+        elif result == "PUSH":
+            b["pushes"] += 1
+
+    roi_pct = round((total_units / total_staked) * 100, 1) if total_staked > 0 else None
+
+    market_breakdown = []
+    for k, b in by_market.items():
+        decided_b = b["wins"] + b["losses"]
+        wr = round((b["wins"] / decided_b) * 100, 1) if decided_b > 0 else None
+        roi_b = round((b["units"] / b["staked"]) * 100, 1) if b["staked"] > 0 else None
+        market_breakdown.append({
+            "market": b["market"],
+            "wins": b["wins"],
+            "losses": b["losses"],
+            "pushes": b["pushes"],
+            "win_rate": wr,
+            "units": round(b["units"], 2),
+            "roi_pct": roi_b,
+        })
+    market_breakdown.sort(key=lambda m: (-(m["units"] or 0), m["market"]))
+
     return {
         "total": total,
         "pending": pending,
@@ -241,4 +340,8 @@ def summary_stats() -> dict:
         "model_pushes": model_row["pushes"] or 0,
         "model_win_rate": model_win_rate,
         "avg_pred_prob_model": avg_pred_model,
+        "total_units": round(total_units, 2),
+        "total_staked": round(total_staked, 2),
+        "roi_pct": roi_pct,
+        "market_breakdown": market_breakdown,
     }
