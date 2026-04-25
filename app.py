@@ -20,8 +20,8 @@ from src.predict import (
     build_spread_lean,
 )
 
-PROJECTED_ROSTER_SCAN_LIMIT = 10
-PROFILE_FETCH_WORKERS = 8
+PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "6"))
+PROFILE_FETCH_WORKERS = int(os.getenv("PROFILE_FETCH_WORKERS", "2"))
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
@@ -331,6 +331,7 @@ def _build_plays_for_game(game):
 
 
 def _refresh_plays_blocking():
+    import gc
     try:
         games = get_todays_games()
     except Exception:
@@ -339,13 +340,24 @@ def _refresh_plays_blocking():
         return
 
     all_plays = []
-    with ThreadPoolExecutor(max_workers=PLAYS_GAME_CONCURRENCY) as pool:
-        futures = [pool.submit(_build_plays_for_game, g) for g in games]
-        for fut in as_completed(futures):
+    if PLAYS_GAME_CONCURRENCY <= 1:
+        # Sequential mode for memory-constrained hosts. Frees pandas
+        # DataFrames between games via explicit GC.
+        for g in games:
             try:
-                all_plays.extend(fut.result())
+                all_plays.extend(_build_plays_for_game(g))
             except Exception:
-                continue
+                pass
+            gc.collect()
+    else:
+        with ThreadPoolExecutor(max_workers=PLAYS_GAME_CONCURRENCY) as pool:
+            futures = [pool.submit(_build_plays_for_game, g) for g in games]
+            for fut in as_completed(futures):
+                try:
+                    all_plays.extend(fut.result())
+                except Exception:
+                    continue
+                gc.collect()
 
     all_plays.sort(key=lambda p: p.get("probability", 0), reverse=True)
     with _PLAYS_LOCK:
