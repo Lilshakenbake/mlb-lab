@@ -1,5 +1,87 @@
+import math
+
 from src import model as _ml
 from src.park_factors import get_factor as _get_park_factor
+
+
+# Compass bearing (degrees, 0=N) from home plate to dead center field.
+# Used to figure out whether tonight's wind is blowing OUT to CF (HR boost)
+# or IN from CF (HR damper). Indoor parks are omitted.
+PARK_ORIENTATIONS = {
+    "Coors Field": 0,
+    "Yankee Stadium": 75,
+    "Fenway Park": 45,
+    "Wrigley Field": 30,
+    "Citi Field": 30,
+    "Camden Yards": 30,
+    "Citizens Bank Park": 15,
+    "Petco Park": 0,
+    "Oracle Park": 90,
+    "Busch Stadium": 60,
+    "Truist Park": 60,
+    "Great American Ball Park": 120,
+    "Comerica Park": 150,
+    "Dodger Stadium": 30,
+    "Angel Stadium": 60,
+    "Kauffman Stadium": 45,
+    "Target Field": 90,
+    "Nationals Park": 30,
+    "PNC Park": 60,
+    "Progressive Field": 0,
+    "Oakland Coliseum": 60,
+    "Athletics Park": 0,
+    "Guaranteed Rate Field": 60,
+}
+
+
+def _wind_out_component(park_name, wind_dir_deg, wind_speed_mph):
+    """Returns mph component of wind blowing OUT to CF (positive) or IN from
+    CF (negative). Wind direction follows meteorological convention: it's the
+    direction the wind is coming FROM. Returns None if we can't compute."""
+    if not park_name or wind_speed_mph is None or wind_dir_deg is None:
+        return None
+    bearing = PARK_ORIENTATIONS.get(park_name)
+    if bearing is None:
+        return None
+    # Direction the wind is moving toward = (from + 180) % 360.
+    blowing_to = (float(wind_dir_deg) + 180.0) % 360.0
+    # Angle between "blowing to" and the CF bearing. 0 = exactly out, 180 = in.
+    diff = abs(((blowing_to - bearing) + 540.0) % 360.0 - 180.0)
+    return math.cos(math.radians(diff)) * float(wind_speed_mph)
+
+
+def _xstat_blend(stat_type, base_projection, hitter_profile):
+    """Blend Statcast expected stats into the projection. xStats catch lucky
+    hitters about to regress and unlucky ones about to break out."""
+    if not hitter_profile:
+        return base_projection
+
+    if stat_type == "hits":
+        x = hitter_profile.get("xhits_avg")
+        if x is not None:
+            return 0.6 * base_projection + 0.4 * float(x)
+
+    elif stat_type == "total_bases":
+        x = hitter_profile.get("xtb_avg")
+        if x is not None:
+            return 0.6 * base_projection + 0.4 * float(x)
+
+    elif stat_type == "home_runs":
+        # Barrel rate is the single best HR predictor — about 25% of barrels
+        # actually leave the yard on average.
+        bbl = hitter_profile.get("barrel_rate")
+        bbe = hitter_profile.get("bbe_per_game")
+        if bbl is not None and bbe is not None:
+            x_hr = float(bbl) * float(bbe) * 0.25
+            return 0.55 * base_projection + 0.45 * x_hr
+
+    elif stat_type == "rbis":
+        x = hitter_profile.get("xtb_avg")
+        if x is not None:
+            # Half of expected TB roughly maps to RBI rate at lineup-spot baseline.
+            return 0.7 * base_projection + 0.3 * (float(x) * 0.5)
+
+    return base_projection
 
 
 def _platoon_factor(stat_type, batter_hand, pitcher_hand):
@@ -211,6 +293,21 @@ def _weather_adjustment(stat_type, weather):
             adj -= 0.02
             note = "Small weather penalty"
 
+    # Wind direction relative to park orientation. Strongest signal for HR.
+    wind_dir = weather.get("wind_direction")
+    park = weather.get("park")
+    out_comp = _wind_out_component(park, wind_dir, wind)
+    if out_comp is not None and abs(out_comp) >= 4:
+        if stat_type == "home_runs":
+            adj += out_comp * 0.012  # +0.18 per game with 15mph straight out
+        elif stat_type in ("total_bases", "rbis"):
+            adj += out_comp * 0.008
+        elif stat_type == "hits":
+            adj += out_comp * 0.003
+        if abs(out_comp) >= 8:
+            direction = "out to CF" if out_comp > 0 else "in from CF"
+            note = f"Wind {abs(out_comp):.0f}mph {direction}"
+
     return adj, note
 
 
@@ -279,6 +376,12 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
             base_projection = 0.5 * base_projection + 0.5 * ml_proj
             model_used = True
 
+    # Statcast xStat blend — applies whether or not a trained model exists.
+    # Catches lucky/unlucky hitters before raw counting stats catch up.
+    pre_x = base_projection
+    base_projection = _xstat_blend(stat_type, base_projection, hitter_profile)
+    xstat_used = abs(base_projection - pre_x) >= 0.01
+
     # Multiplicative context factors (zero new HTTP — derived from data we already pull).
     park_key = {"hits": "hits", "total_bases": "tb", "home_runs": "hr", "rbis": "tb"}.get(stat_type, "hits")
     park_f = _get_park_factor(park_name).get(park_key, 1.0)
@@ -312,6 +415,8 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         factor_bits.append(f"platoon {platoon_f - 1:+.0%}")
     if abs(hot_f - 1.0) >= 0.04:
         factor_bits.append(f"trend {hot_f - 1:+.0%}")
+    if xstat_used:
+        factor_bits.append("xStats")
 
     # stricter penalties for weak starter profiles
     if stat_type == "hits" and base_projection < 0.70:

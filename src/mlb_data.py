@@ -336,6 +336,45 @@ def get_last5_hitter_profile(player_name):
         last3_mean = float(last3.mean()) if len(last3) else hits_overall
         hot_ratio = (last3_mean / hits_overall) if hits_overall > 0 else 1.0
 
+        # ── Statcast expected stats (xStats): strip out luck. ─────────────
+        # `type` is "X" for batted balls, "S"/"B" for swings/balls. xBA and
+        # xwOBA only exist for batted balls; PA-level wOBA exists everywhere.
+        bbe = df[df["type"] == "X"] if "type" in df.columns else df
+        xba_per_bbe = pd.to_numeric(
+            bbe.get("estimated_ba_using_speedangle"), errors="coerce"
+        ).dropna() if "estimated_ba_using_speedangle" in bbe.columns else None
+        xwoba_per_pa = pd.to_numeric(
+            df.get("estimated_woba_using_speedangle"), errors="coerce"
+        ).dropna() if "estimated_woba_using_speedangle" in df.columns else None
+
+        bbe_per_game = (
+            (df["type"] == "X").groupby(df["game_date"]).sum().tail(8).mean()
+            if "type" in df.columns else None
+        )
+        pa_per_game = float(df.groupby("game_date").size().tail(8).mean())
+
+        xhits_avg = (
+            float(xba_per_bbe.mean()) * float(bbe_per_game)
+            if xba_per_bbe is not None and len(xba_per_bbe) and bbe_per_game else None
+        )
+        # xwOBA scales roughly to slugging; *1.7 rough TB-per-PA conversion.
+        xtb_avg = (
+            float(xwoba_per_pa.mean()) * pa_per_game * 1.7
+            if xwoba_per_pa is not None and len(xwoba_per_pa) else None
+        )
+
+        # Barrel rate (Statcast quality bucket = 6) and hard-hit rate (≥95mph EV).
+        barrel_rate = None
+        hard_hit_rate = None
+        if "launch_speed_angle" in bbe.columns and len(bbe) > 0:
+            lsa = pd.to_numeric(bbe["launch_speed_angle"], errors="coerce").dropna()
+            if len(lsa) > 0:
+                barrel_rate = float((lsa == 6).sum()) / float(len(lsa))
+        if "launch_speed" in bbe.columns and len(bbe) > 0:
+            ls = pd.to_numeric(bbe["launch_speed"], errors="coerce").dropna()
+            if len(ls) > 0:
+                hard_hit_rate = float((ls >= 95).sum()) / float(len(ls))
+
         profile = {
             "hits_avg": round(float(hits_by_game.mean()), 2),
             "hr_avg": round(float(hr_by_game.mean()), 2),
@@ -346,6 +385,12 @@ def get_last5_hitter_profile(player_name):
             "hand": _safe_hand(df, "stand"),  # L/R/S
             "hot_ratio": round(hot_ratio, 2),
             "games_used": int(len(hits_by_game)),
+            # xStats — luck-stripped projections for the predictor.
+            "xhits_avg": round(xhits_avg, 3) if xhits_avg is not None else None,
+            "xtb_avg": round(xtb_avg, 3) if xtb_avg is not None else None,
+            "barrel_rate": round(barrel_rate, 3) if barrel_rate is not None else None,
+            "hard_hit_rate": round(hard_hit_rate, 3) if hard_hit_rate is not None else None,
+            "bbe_per_game": round(float(bbe_per_game), 2) if bbe_per_game is not None else None,
         }
 
         BatterProfileCache[player_name] = profile
