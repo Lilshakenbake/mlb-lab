@@ -1,1 +1,1 @@
-{"ts": 1777149511.890882, "data": {"hits_avg": 0.57, "hr_avg": 0.0, "tb_avg": 0.71, "rbi_avg": 0.27, "hits_std": 0.53, "tb_std": 0.76, "hand": "R", "hot_ratio": 0.58, "games_used": 7, "xhits_avg": 1.409, "xtb_avg": 7.493, "barrel_rate": 0.1, "hard_hit_rate": 0.3, "bbe_per_game": 1.43}}
+{"ts": 1777206068.8338814, "data": {"hits_avg": 0.67, "hr_avg": 0.0, "tb_avg": 0.83, "rbi_avg": 0.32, "hits_std": 0.52, "tb_std": 0.75, "hand": "R", "hot_ratio": 0.5, "games_used": 6, "xhits_avg": 1.479, "xtb_avg": 6.915, "barrel_rate": 0.111, "hard_hit_rate": 0.333, "bbe_per_game": 1.5}}
