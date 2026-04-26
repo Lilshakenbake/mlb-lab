@@ -436,6 +436,18 @@ def api_odds(play_id):
     return jsonify({"ok": ok})
 
 
+@app.route("/api/units/<int:play_id>", methods=["POST"])
+@login_required
+def api_units(play_id):
+    units_val = request.form.get("units") if request.form else None
+    if units_val is None and request.is_json:
+        units_val = (request.get_json(silent=True) or {}).get("units")
+    ok = tracker.update_units(play_id, units_val)
+    if request.form:
+        return redirect(url_for("watchlist"))
+    return jsonify({"ok": ok})
+
+
 @app.route("/api/track", methods=["POST"])
 @login_required
 def api_track():

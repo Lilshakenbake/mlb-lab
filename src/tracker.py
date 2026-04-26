@@ -31,13 +31,27 @@ def odds_to_profit(american_odds) -> float:
     return 100.0 / abs(o)
 
 
-def units_for(result: str, american_odds) -> float:
-    """Units P/L assuming a 1u stake."""
+def units_for(result: str, american_odds, stake: float = 1.0) -> float:
+    """Units P/L for a given stake size. Default stake = 1u."""
+    s = float(stake) if stake is not None else 1.0
     if result == "WIN":
-        return round(odds_to_profit(american_odds), 3)
+        return round(odds_to_profit(american_odds) * s, 3)
     if result == "LOSS":
-        return -1.0
+        return round(-1.0 * s, 3)
     return 0.0  # PUSH or pending
+
+
+def suggest_units(probability) -> float:
+    """Auto-suggest stake size from confidence %. Recreational-sharp tiering."""
+    try:
+        p = float(probability or 0)
+    except (TypeError, ValueError):
+        p = 0.0
+    if p >= 70: return 2.0
+    if p >= 65: return 1.5
+    if p >= 60: return 1.0
+    if p >= 55: return 0.5
+    return 0.5
 
 
 def _ensure_dir():
@@ -96,6 +110,10 @@ def init_db():
                     "UPDATE tracked_plays SET odds=? WHERE odds IS NULL",
                     (DEFAULT_ODDS,),
                 )
+            # Per-pick unit sizing. 1.0 default = legacy behavior.
+            if "units" not in cols:
+                conn.execute("ALTER TABLE tracked_plays ADD COLUMN units REAL DEFAULT 1.0")
+                conn.execute("UPDATE tracked_plays SET units=1.0 WHERE units IS NULL")
         _INITIALIZED = True
 
 
@@ -119,6 +137,10 @@ def add_play(payload: dict) -> dict:
     odds_in = _to_float(payload.get("odds"))
     if odds_in is None:
         odds_in = float(DEFAULT_ODDS)
+    prob = _to_float(payload.get("probability")) or 0.0
+    units_in = _to_float(payload.get("units"))
+    if units_in is None or units_in <= 0:
+        units_in = suggest_units(prob)
     row = {
         "created_at": datetime.utcnow().isoformat(timespec="seconds"),
         "game_pk": payload.get("game_pk"),
@@ -131,9 +153,10 @@ def add_play(payload: dict) -> dict:
         "line": _to_float(payload.get("line")),
         "projection": _to_float(payload.get("projection")),
         "edge": _to_float(payload.get("edge")),
-        "probability": _to_float(payload.get("probability")) or 0.0,
+        "probability": prob,
         "model_used": 1 if payload.get("model_used") else 0,
         "odds": odds_in,
+        "units": units_in,
     }
 
     with _connect() as conn:
@@ -159,14 +182,14 @@ def add_play(payload: dict) -> dict:
             """
             INSERT INTO tracked_plays
               (created_at, game_pk, game_date, matchup, kind, headline,
-               stat_label, pick, line, projection, edge, probability, model_used, odds)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               stat_label, pick, line, projection, edge, probability, model_used, odds, units)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["created_at"], row["game_pk"], row["game_date"], row["matchup"],
                 row["kind"], row["headline"], row["stat_label"], row["pick"],
                 row["line"], row["projection"], row["edge"], row["probability"],
-                row["model_used"], row["odds"],
+                row["model_used"], row["odds"], row["units"],
             ),
         )
         return {"ok": True, "id": cur.lastrowid, "duplicate": False}
@@ -179,6 +202,18 @@ def update_odds(play_id: int, odds) -> bool:
         return False
     with _connect() as conn:
         cur = conn.execute("UPDATE tracked_plays SET odds=? WHERE id=?", (o, play_id))
+        return cur.rowcount > 0
+
+
+def update_units(play_id: int, units) -> bool:
+    """Update stake size for a pick. Clamped to [0.1, 10] units for sanity."""
+    init_db()
+    u = _to_float(units)
+    if u is None or u <= 0:
+        return False
+    u = max(0.1, min(10.0, u))
+    with _connect() as conn:
+        cur = conn.execute("UPDATE tracked_plays SET units=? WHERE id=?", (u, play_id))
         return cur.rowcount > 0
 
 
@@ -279,7 +314,7 @@ def summary_stats() -> dict:
     by_market: dict[str, dict] = {}
     with _connect() as conn:
         for r in conn.execute(
-            "SELECT kind, stat_label, result, odds FROM tracked_plays WHERE result IS NOT NULL"
+            "SELECT kind, stat_label, result, odds, units FROM tracked_plays WHERE result IS NOT NULL"
         ):
             settled_rows.append(r)
 
@@ -288,9 +323,10 @@ def summary_stats() -> dict:
     for r in settled_rows:
         result = r["result"]
         odds = r["odds"] if r["odds"] is not None else DEFAULT_ODDS
-        u = units_for(result, odds)
+        stake = r["units"] if r["units"] is not None else 1.0
+        u = units_for(result, odds, stake)
         total_units += u
-        total_staked += 1.0  # 1u flat stake per pick
+        total_staked += float(stake)
 
         # Per-market bucket
         bucket_key = r["stat_label"] or (r["kind"] or "other").title()
@@ -300,7 +336,7 @@ def summary_stats() -> dict:
              "units": 0.0, "staked": 0.0},
         )
         b["units"] += u
-        b["staked"] += 1.0
+        b["staked"] += float(stake)
         if result == "WIN":
             b["wins"] += 1
         elif result == "LOSS":
