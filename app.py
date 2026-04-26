@@ -18,6 +18,7 @@ from src.predict import (
     build_hitter_prop,
     build_pitcher_k_prop,
     build_spread_lean,
+    compute_hr_threat,
 )
 
 PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "6"))
@@ -36,6 +37,12 @@ PLAYS_GAME_CONCURRENCY = int(os.getenv("PLAYS_GAME_CONCURRENCY", "2"))
 PLAYS_LIMIT = int(os.getenv("PLAYS_LIMIT", "12"))
 BOARD_INNER_CONCURRENCY = int(os.getenv("BOARD_INNER_CONCURRENCY", "3"))
 _PLAYS_LOCK = threading.Lock()
+
+# HR Threats Board — separate from Plays of the Day. Ranks tonight's hitters
+# purely by probability of 1+ HR (not by line edge), since HR lines are almost
+# always 0.5 and the standard edge logic biases toward UNDER.
+HR_THREATS_CACHE = {"ts": 0, "data": []}
+HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "12"))
 
 STAT_LABELS = {
     "hits": "Hits",
@@ -222,6 +229,28 @@ def build_game_boards(game):
         weather=weather,
     )
 
+    # HR Threats — pure probability ranking, independent of line edge.
+    matchup_label = f"{game['away_team']} @ {game['home_team']}"
+    hr_threats = []
+    for idx, (_, name, profile) in enumerate(away_hitters):
+        t = compute_hr_threat(
+            name, profile, home_pitcher_name, home_pitcher_profile,
+            idx, weather, park_name,
+        )
+        if t:
+            t["matchup"] = matchup_label
+            t["game_pk"] = game.get("gamePk")
+            hr_threats.append(t)
+    for idx, (_, name, profile) in enumerate(home_hitters):
+        t = compute_hr_threat(
+            name, profile, away_pitcher_name, away_pitcher_profile,
+            idx, weather, park_name,
+        )
+        if t:
+            t["matchup"] = matchup_label
+            t["game_pk"] = game.get("gamePk")
+            hr_threats.append(t)
+
     return {
         "top_hits": sorted(top_hits, key=lambda x: x["probability"], reverse=True),
         "top_total_bases": sorted(top_total_bases, key=lambda x: x["probability"], reverse=True),
@@ -232,6 +261,7 @@ def build_game_boards(game):
         "weather": weather,
         "lineup_confirmed": lineup_confirmed,
         "projected_mode": projected_mode,
+        "hr_threats": hr_threats,
     }
 
 
@@ -360,10 +390,21 @@ def _refresh_plays_blocking():
                 gc.collect()
 
     all_plays.sort(key=lambda p: p.get("probability", 0), reverse=True)
+
+    # HR threats piggyback on the same boards we just built — no extra fetches.
+    hr_threats_all = []
+    for g in games:
+        cached = BOARD_CACHE.get(g.get("gamePk"))
+        if cached and cached.get("data"):
+            hr_threats_all.extend(cached["data"].get("hr_threats", []))
+    hr_threats_all.sort(key=lambda x: x.get("probability", 0), reverse=True)
+
     with _PLAYS_LOCK:
         PLAYS_CACHE["ts"] = time.time()
         PLAYS_CACHE["data"] = all_plays[:PLAYS_LIMIT]
         PLAYS_CACHE["computing"] = False
+        HR_THREATS_CACHE["ts"] = time.time()
+        HR_THREATS_CACHE["data"] = hr_threats_all[:HR_THREATS_LIMIT]
 
 
 def get_plays_of_day_snapshot():
@@ -392,6 +433,20 @@ def get_plays_of_day_snapshot():
 def home():
     games = get_todays_games()
     return render_template("index.html", games=games, best_plays=[])
+
+
+@app.route("/api/hr-threats", methods=["GET"])
+@login_required
+def api_hr_threats():
+    with _PLAYS_LOCK:
+        data = list(HR_THREATS_CACHE["data"])
+        ts = HR_THREATS_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+    return jsonify({
+        "threats": data,
+        "ts": ts,
+        "computing": computing,
+    })
 
 
 @app.route("/api/plays-of-day", methods=["GET"])

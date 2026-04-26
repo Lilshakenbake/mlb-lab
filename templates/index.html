@@ -159,6 +159,15 @@
 
     <hr>
 
+    <h2>🔥 Home Run Threats</h2>
+    <p class="sub">Tonight's most likely hitters to go yard, ranked by HR probability</p>
+
+    <div id="hr-threats" class="games-grid">
+        <div class="card empty" id="hr-loading">Loading HR threats…</div>
+    </div>
+
+    <hr>
+
     <h2>Today’s Slate</h2>
 
     {% if games %}
@@ -288,6 +297,67 @@
     };
 
     loadPlays();
+})();
+
+// ── HR Threats board ─────────────────────────────────────────────────
+(function () {
+    const grid = document.getElementById("hr-threats");
+    if (!grid) return;
+
+    const escape = (s) => String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    const cardHtml = (t) => {
+        const link = t.game_pk ? `/game/${t.game_pk}` : "#";
+        const why = t.why ? `<div class="detail" style="font-size:11px; color:#fcd34d;">${escape(t.why)}</div>` : "";
+        const fairBit = t.fair_odds
+            ? `<div class="detail"><strong>Fair odds:</strong> ${escape(t.fair_odds)}</div>`
+            : "";
+        return `
+            <div class="card play-card">
+              <a href="${link}" style="text-decoration:none; color:inherit;">
+                <div>
+                  <div class="matchup">${escape(t.player)}</div>
+                  <div class="detail" style="color:#94a3b8; font-size:12px;">
+                    ${escape(t.matchup || "")}${t.park ? " · " + escape(t.park) : ""}
+                  </div>
+                  <div class="detail" style="font-size:12px;">
+                    vs ${escape(t.vs || "TBD")}${t.lineup_spot ? " · #" + t.lineup_spot : ""}
+                  </div>
+                  ${fairBit}
+                  ${why}
+                </div>
+                <div class="prob-big" style="color:#fb923c;">${escape(t.probability)}% HR</div>
+              </a>
+            </div>`;
+    };
+
+    const render = (threats) => {
+        if (!threats || threats.length === 0) {
+            grid.innerHTML = '<div class="card empty">No HR threats yet — still computing.</div>';
+            return;
+        }
+        grid.innerHTML = threats.map(cardHtml).join("");
+    };
+
+    const loadThreats = () => {
+        fetch("/api/hr-threats", { credentials: "same-origin" })
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(data => {
+                render(data.threats || []);
+                if (data.computing && (!data.threats || data.threats.length === 0)) {
+                    grid.innerHTML = '<div class="card empty">Computing HR threats… refreshing automatically.</div>';
+                    setTimeout(loadThreats, 8000);
+                } else if (data.computing) {
+                    setTimeout(loadThreats, 15000);
+                }
+            })
+            .catch(() => {
+                grid.innerHTML = '<div class="card empty">Could not load HR threats. Refresh to retry.</div>';
+            });
+    };
+
+    loadThreats();
 })();
 </script>
 

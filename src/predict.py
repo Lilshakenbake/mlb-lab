@@ -50,6 +50,102 @@ def _wind_out_component(park_name, wind_dir_deg, wind_speed_mph):
     return math.cos(math.radians(diff)) * float(wind_speed_mph)
 
 
+def _prob_to_american(prob):
+    """Convert a probability (0-1) to a fair American odds string like '+450' or '-180'."""
+    p = max(0.01, min(0.99, float(prob)))
+    if p >= 0.5:
+        val = round(100.0 * p / (1.0 - p))
+        return f"-{val}"
+    val = round(100.0 * (1.0 - p) / p)
+    return f"+{val}"
+
+
+def compute_hr_threat(hitter_name, hitter_profile, opp_pitcher_name,
+                      opp_pitcher_profile, lineup_index, weather, park_name):
+    """Pure HR-likelihood ranking — answers 'who's most likely to homer tonight?'
+    Returns probability of 1+ HR (Poisson on expected HR) and fair odds. This is
+    independent of the line-vs-projection edge logic the Plays of the Day uses."""
+    if not hitter_profile:
+        return None
+
+    raw = float(hitter_profile.get("hr_avg") or 0.0)
+    bbl = hitter_profile.get("barrel_rate")
+    bbe = hitter_profile.get("bbe_per_game")
+
+    # Blend raw HR/g with barrel-based xHR. Barrel rate is the #1 HR predictor.
+    if bbl is not None and bbe is not None:
+        x_hr = float(bbl) * float(bbe) * 0.25
+        base = 0.50 * raw + 0.50 * x_hr
+    else:
+        base = raw
+
+    if base <= 0:
+        return None
+
+    # Park HR factor.
+    park_hr_f = _get_park_factor(park_name).get("hr", 1.0)
+    expected = base * park_hr_f
+
+    # Platoon (lefty bat vs righty pitcher = HR boost, etc.).
+    expected *= _platoon_factor(
+        "home_runs",
+        hitter_profile.get("hand"),
+        (opp_pitcher_profile or {}).get("hand"),
+    )
+
+    # Strikeout-heavy starter suppresses HR; soft-tosser inflates.
+    expected *= _pitcher_k_damper(
+        "home_runs",
+        (opp_pitcher_profile or {}).get("strikeouts_avg"),
+    )
+
+    # Lineup spot — top of order gets PA volume; heart of order gets best counts.
+    spot = lineup_index + 1
+    if spot in (3, 4, 5):
+        expected *= 1.08
+    elif spot in (1, 2):
+        expected *= 1.04
+
+    # Wind out to CF.
+    wind_note = None
+    if weather and not weather.get("is_indoor"):
+        out_comp = _wind_out_component(
+            park_name,
+            weather.get("wind_direction"),
+            weather.get("wind_speed"),
+        )
+        if out_comp is not None and abs(out_comp) >= 4:
+            expected += out_comp * 0.012
+            if abs(out_comp) >= 8:
+                direction = "out to CF" if out_comp > 0 else "in from CF"
+                wind_note = f"Wind {abs(out_comp):.0f}mph {direction}"
+
+    expected = max(0.005, expected)
+    # Poisson: P(at least 1 HR) = 1 - e^(-lambda)
+    prob = 1.0 - math.exp(-expected)
+
+    # Build short reasoning bits.
+    reasons = []
+    if bbl is not None and float(bbl) >= 0.10:
+        reasons.append(f"barrel {float(bbl)*100:.0f}%")
+    if abs(park_hr_f - 1.0) >= 0.05:
+        reasons.append(f"park {(park_hr_f - 1)*100:+.0f}%")
+    if wind_note:
+        reasons.append(wind_note)
+
+    return {
+        "player": hitter_name,
+        "vs": opp_pitcher_name,
+        "park": park_name,
+        "expected_hr": round(expected, 3),
+        "probability": round(prob * 100, 1),
+        "fair_odds": _prob_to_american(prob),
+        "barrel_rate": float(bbl) if bbl is not None else None,
+        "lineup_spot": spot,
+        "why": " · ".join(reasons) if reasons else None,
+    }
+
+
 def _xstat_blend(stat_type, base_projection, hitter_profile):
     """Blend Statcast expected stats into the projection. xStats catch lucky
     hitters about to regress and unlucky ones about to break out."""
