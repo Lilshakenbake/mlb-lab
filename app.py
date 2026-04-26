@@ -629,6 +629,30 @@ def game_detail(game_pk):
     )
 
 
+def _auto_warm_cache_on_boot():
+    """Fire a background slate warm-up once per process at startup.
+
+    Skipped when AUTO_WARM_CACHE=0 or when running under Flask's debug
+    reloader parent process (only the child should warm)."""
+    if os.getenv("AUTO_WARM_CACHE", "1") != "1":
+        return
+    if os.getenv("WERKZEUG_RUN_MAIN") == "false":
+        return
+    try:
+        with _PLAYS_LOCK:
+            if PLAYS_CACHE["computing"]:
+                return
+            PLAYS_CACHE["computing"] = True
+        t = threading.Thread(target=_refresh_plays_blocking, daemon=True)
+        t.start()
+        print("[startup] auto-warming slate cache in background")
+    except Exception as e:
+        print(f"[startup] auto-warm failed: {e}")
+
+
+_auto_warm_cache_on_boot()
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
