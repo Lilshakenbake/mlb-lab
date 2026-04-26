@@ -363,48 +363,56 @@ def _build_plays_for_game(game):
 def _refresh_plays_blocking():
     import gc
     try:
-        games = get_todays_games()
-    except Exception:
+        try:
+            games = get_todays_games()
+        except Exception as e:
+            print(f"[plays-refresh] failed to load schedule: {e}")
+            return
+
+        all_plays = []
+        if PLAYS_GAME_CONCURRENCY <= 1:
+            # Sequential mode for memory-constrained hosts. Frees pandas
+            # DataFrames between games via explicit GC.
+            for g in games:
+                try:
+                    all_plays.extend(_build_plays_for_game(g))
+                except Exception as e:
+                    print(f"[plays-refresh] game {g.get('gamePk')} failed: {e}")
+                gc.collect()
+        else:
+            with ThreadPoolExecutor(max_workers=PLAYS_GAME_CONCURRENCY) as pool:
+                futures = [pool.submit(_build_plays_for_game, g) for g in games]
+                for fut in as_completed(futures):
+                    try:
+                        all_plays.extend(fut.result())
+                    except Exception as e:
+                        print(f"[plays-refresh] game build failed: {e}")
+                        continue
+                    gc.collect()
+
+        all_plays.sort(key=lambda p: p.get("probability", 0), reverse=True)
+
+        # HR threats piggyback on the same boards we just built — no extra fetches.
+        hr_threats_all = []
+        for g in games:
+            cached = BOARD_CACHE.get(g.get("gamePk"))
+            if cached and cached.get("data"):
+                hr_threats_all.extend(cached["data"].get("hr_threats", []))
+        hr_threats_all.sort(key=lambda x: x.get("probability", 0), reverse=True)
+
+        with _PLAYS_LOCK:
+            PLAYS_CACHE["ts"] = time.time()
+            PLAYS_CACHE["data"] = all_plays[:PLAYS_LIMIT]
+            HR_THREATS_CACHE["ts"] = time.time()
+            HR_THREATS_CACHE["data"] = hr_threats_all[:HR_THREATS_LIMIT]
+        print(f"[plays-refresh] done: {len(all_plays)} plays, {len(hr_threats_all)} HR threats")
+    except Exception as e:
+        print(f"[plays-refresh] unexpected error: {e}")
+    finally:
+        # ALWAYS release the computing flag, even on crash. Prevents "stuck
+        # on computing" state forever if the worker hits an unhandled error.
         with _PLAYS_LOCK:
             PLAYS_CACHE["computing"] = False
-        return
-
-    all_plays = []
-    if PLAYS_GAME_CONCURRENCY <= 1:
-        # Sequential mode for memory-constrained hosts. Frees pandas
-        # DataFrames between games via explicit GC.
-        for g in games:
-            try:
-                all_plays.extend(_build_plays_for_game(g))
-            except Exception:
-                pass
-            gc.collect()
-    else:
-        with ThreadPoolExecutor(max_workers=PLAYS_GAME_CONCURRENCY) as pool:
-            futures = [pool.submit(_build_plays_for_game, g) for g in games]
-            for fut in as_completed(futures):
-                try:
-                    all_plays.extend(fut.result())
-                except Exception:
-                    continue
-                gc.collect()
-
-    all_plays.sort(key=lambda p: p.get("probability", 0), reverse=True)
-
-    # HR threats piggyback on the same boards we just built — no extra fetches.
-    hr_threats_all = []
-    for g in games:
-        cached = BOARD_CACHE.get(g.get("gamePk"))
-        if cached and cached.get("data"):
-            hr_threats_all.extend(cached["data"].get("hr_threats", []))
-    hr_threats_all.sort(key=lambda x: x.get("probability", 0), reverse=True)
-
-    with _PLAYS_LOCK:
-        PLAYS_CACHE["ts"] = time.time()
-        PLAYS_CACHE["data"] = all_plays[:PLAYS_LIMIT]
-        PLAYS_CACHE["computing"] = False
-        HR_THREATS_CACHE["ts"] = time.time()
-        HR_THREATS_CACHE["data"] = hr_threats_all[:HR_THREATS_LIMIT]
 
 
 def get_plays_of_day_snapshot():
