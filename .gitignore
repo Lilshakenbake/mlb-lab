@@ -103,5 +103,11 @@ artifacts/
 main.py
 replit.md
 
-data_cache/
+data_cache/*/
+!data_cache/hitter_profile/
+!data_cache/pitcher_profile/
+!data_cache/player_id/
+!data_cache/roster/
+!data_cache/schedule/
+!data_cache/weather/
 tracked_data/

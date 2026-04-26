@@ -455,6 +455,31 @@ def api_plays_of_day():
     return jsonify(get_plays_of_day_snapshot())
 
 
+@app.route("/admin/warm-cache", methods=["GET", "POST"])
+@login_required
+def admin_warm_cache():
+    """Kick off a background slate scan to pre-warm the profile + plays cache.
+    Useful right after a Render deploy. Returns immediately; UI shows
+    'computing...' until done. Safe to call repeatedly — no-op if already
+    running or already fresh."""
+    started = False
+    with _PLAYS_LOCK:
+        if not PLAYS_CACHE["computing"]:
+            PLAYS_CACHE["computing"] = True
+            t = threading.Thread(target=_refresh_plays_blocking, daemon=True)
+            t.start()
+            started = True
+    return jsonify({
+        "started": started,
+        "message": (
+            "Cache warm-up started in background. Check /api/plays-of-day "
+            "in 1-2 minutes for results."
+            if started
+            else "Cache warm-up already in progress."
+        ),
+    })
+
+
 @app.route("/watchlist", methods=["GET"])
 @login_required
 def watchlist():
