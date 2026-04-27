@@ -153,9 +153,16 @@ def _xstat_blend(stat_type, base_projection, hitter_profile):
         return base_projection
 
     if stat_type == "hits":
+        # Contact-aware Hits blend: high contact hitters get a Hits boost
+        # (more balls in play → more chances to land a hit). K-prone power
+        # hitters get pushed DOWN on Hits (they should win on HR/TB instead).
         x = hitter_profile.get("xhits_avg")
+        contact = hitter_profile.get("contact_rate")
+        # League avg contact ~0.62 (BIP per PA). Each 5pp = ~3% Hits shift.
+        contact_mult = 1.0 + min(max((float(contact) - 0.62) * 0.6, -0.10), 0.10) if contact is not None else 1.0
         if x is not None:
-            return 0.6 * base_projection + 0.4 * float(x)
+            return (0.6 * base_projection + 0.4 * float(x)) * contact_mult
+        return base_projection * contact_mult
 
     elif stat_type == "total_bases":
         # Multi-source TB blend: xTB (luck-stripped) + barrel power + ISO.
@@ -189,10 +196,26 @@ def _xstat_blend(stat_type, base_projection, hitter_profile):
             return 0.55 * base_projection + 0.45 * x_hr
 
     elif stat_type == "rbis":
-        x = hitter_profile.get("xtb_avg")
-        if x is not None:
-            # Half of expected TB roughly maps to RBI rate at lineup-spot baseline.
-            return 0.7 * base_projection + 0.3 * (float(x) * 0.5)
+        # RBI = power × opportunity. Decoupled from TB by leaning on raw HR
+        # rate (every HR is ≥1 RBI) and ISO (slug-per-hit) instead of xTB.
+        # The lineup boost separately handles the "opportunity" component.
+        hr_avg = hitter_profile.get("hr_avg")
+        iso = hitter_profile.get("iso_power")
+        bbl = hitter_profile.get("barrel_rate")
+        bbe = hitter_profile.get("bbe_per_game")
+        # Each HR ≈ 1.6 RBI on average across MLB. Power signal independent of TB.
+        hr_signal = float(hr_avg) * 1.6 if hr_avg is not None else None
+        # Barrels in play that AREN'T HR still produce ~0.4 RBI each (doubles in gaps).
+        barrel_signal = float(bbl) * float(bbe) * 0.4 if (bbl is not None and bbe is not None) else None
+        # Slugger multiplier — ISO of 0.4+ adds ~14% to RBI projection.
+        iso_mult = 1.0 + 0.35 * float(iso) if iso is not None else 1.0
+
+        signals = [s for s in (hr_signal, barrel_signal) if s is not None]
+        if signals:
+            avg_signal = sum(signals) / len(signals)
+            blended = 0.55 * base_projection + 0.45 * avg_signal
+            return blended * iso_mult
+        return base_projection * iso_mult
 
     return base_projection
 

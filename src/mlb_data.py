@@ -381,6 +381,12 @@ def get_last5_hitter_profile(player_name):
         tb_mean = float(tb_by_game.mean()) or 0.0
         iso_power = (tb_mean - hits_mean) / hits_mean if hits_mean > 0 else 0.0
 
+        # Contact rate = balls in play / plate appearances. High = contact
+        # hitter (great for Hits), low = K-prone (great for HR/TB only).
+        contact_rate = float(bbe_per_game) / pa_per_game if (
+            bbe_per_game is not None and pa_per_game and pa_per_game > 0
+        ) else None
+
         profile = {
             "hits_avg": round(float(hits_by_game.mean()), 2),
             "hr_avg": round(float(hr_by_game.mean()), 2),
@@ -389,6 +395,7 @@ def get_last5_hitter_profile(player_name):
             "hits_std": round(float(hits_by_game.std() or 0.0), 2),
             "tb_std": round(float(tb_by_game.std() or 0.0), 2),
             "iso_power": round(iso_power, 3),
+            "contact_rate": round(contact_rate, 3) if contact_rate is not None else None,
             "hand": _safe_hand(df, "stand"),  # L/R/S
             "hot_ratio": round(hot_ratio, 2),
             "games_used": int(len(hits_by_game)),
