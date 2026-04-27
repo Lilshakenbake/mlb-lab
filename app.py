@@ -176,7 +176,7 @@ def build_game_boards(game):
 
     park_name = (weather or {}).get("park")
 
-    def _hitter_props(hitters, opposing_pitcher_name, opposing_profile, side_score):
+    def _hitter_props(hitters, opposing_pitcher_name, opposing_profile, side_score, opp_team_name=None):
         for idx, (_, hitter_name, hitter_profile) in enumerate(hitters):
             try:
                 pitcher_hits_allowed = (
@@ -202,6 +202,7 @@ def build_game_boards(game):
                         hitter_profile=hitter_profile,
                         opp_pitcher_profile=opposing_profile,
                         park_name=park_name,
+                        opp_team=opp_team_name,
                     )
                     if prop["pick"] != "PASS":
                         bucket.append(prop)
@@ -215,8 +216,9 @@ def build_game_boards(game):
 
     away_box = [away_team_score]
     home_box = [home_team_score]
-    _hitter_props(away_hitters, home_pitcher_name, home_pitcher_profile, away_box)
-    _hitter_props(home_hitters, away_pitcher_name, away_pitcher_profile, home_box)
+    # Pass opposing team name so bullpen factor can apply to late-inning ABs.
+    _hitter_props(away_hitters, home_pitcher_name, home_pitcher_profile, away_box, game.get("home_team"))
+    _hitter_props(home_hitters, away_pitcher_name, away_pitcher_profile, home_box, game.get("away_team"))
     away_team_score = away_box[0]
     home_team_score = home_box[0]
 

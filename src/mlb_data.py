@@ -330,6 +330,17 @@ def get_last5_hitter_profile(player_name):
         if len(hits_by_game) == 0:
             return None, "No recent games found"
 
+        # ── Recency weighting: last 3 games count 2x ──────────────────────
+        # A guy on a 7-for-9 tear should NOT be averaged with a cold week.
+        # Weights: last 3 games × 2.0, prior 5 × 1.0  → catches streaks early.
+        def _weighted_mean(series):
+            if len(series) == 0:
+                return 0.0
+            n = len(series)
+            weights = [2.0 if i >= max(0, n - 3) else 1.0 for i in range(n)]
+            total_weight = sum(weights)
+            return sum(float(v) * w for v, w in zip(series, weights)) / total_weight
+
         # Hot-streak: last 3 vs overall window. >1 = hot, <1 = cold.
         last3 = hits_by_game.tail(3)
         hits_overall = float(hits_by_game.mean()) or 0.0
@@ -395,10 +406,10 @@ def get_last5_hitter_profile(player_name):
         ) else None
 
         profile = {
-            "hits_avg": round(float(hits_by_game.mean()), 2),
-            "hr_avg": round(float(hr_by_game.mean()), 2),
-            "tb_avg": round(float(tb_by_game.mean()), 2),
-            "rbi_avg": round(float(rbi_by_game.mean()), 2),
+            "hits_avg": round(_weighted_mean(hits_by_game), 2),
+            "hr_avg": round(_weighted_mean(hr_by_game), 2),
+            "tb_avg": round(_weighted_mean(tb_by_game), 2),
+            "rbi_avg": round(_weighted_mean(rbi_by_game), 2),
             "hits_std": round(float(hits_by_game.std() or 0.0), 2),
             "tb_std": round(float(tb_by_game.std() or 0.0), 2),
             "iso_power": round(iso_power, 3),
@@ -450,6 +461,16 @@ def get_last5_pitcher_profile(pitcher_name):
         if len(strikeouts_by_game) == 0:
             return None, "No recent pitcher games found"
 
+        # ── Recency weighting for pitchers: last 3 starts count 2x ────────
+        # A pitcher coming off two gems vs his last 8 = different threat.
+        def _weighted_mean(series):
+            if len(series) == 0:
+                return 0.0
+            n = len(series)
+            weights = [2.0 if i >= max(0, n - 3) else 1.0 for i in range(n)]
+            total_weight = sum(weights)
+            return sum(float(v) * w for v, w in zip(series, weights)) / total_weight
+
         # ── Power-allowed metrics — separate aces from contact-friendly arms ──
         # Pulled from the SAME Statcast DF, no new HTTP.
         hr_allowed_by_game = grouped["events"].apply(
@@ -480,10 +501,10 @@ def get_last5_pitcher_profile(pitcher_name):
                 barrel_allowed = float((lsa == 6).sum()) / float(len(lsa))
 
         profile = {
-            "hits_allowed_avg": round(float(hits_allowed_by_game.mean()), 2),
-            "tb_allowed_avg": round(float(tb_allowed_by_game.mean()), 2),
-            "hr_allowed_avg": round(float(hr_allowed_by_game.mean()), 3),
-            "strikeouts_avg": round(float(strikeouts_by_game.mean()), 2),
+            "hits_allowed_avg": round(_weighted_mean(hits_allowed_by_game), 2),
+            "tb_allowed_avg": round(_weighted_mean(tb_allowed_by_game), 2),
+            "hr_allowed_avg": round(_weighted_mean(hr_allowed_by_game), 3),
+            "strikeouts_avg": round(_weighted_mean(strikeouts_by_game), 2),
             "k_std": round(float(strikeouts_by_game.std() or 0.0), 2),
             "xwoba_allowed": round(float(xwoba_allowed.mean()), 3) if xwoba_allowed is not None and len(xwoba_allowed) else None,
             "hard_hit_allowed": round(hard_hit_allowed, 3) if hard_hit_allowed is not None else None,

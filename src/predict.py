@@ -545,7 +545,7 @@ def _pitcher_adjustment(stat_type, pitcher_hits_allowed):
 
 def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projection,
                       pitcher_hits_allowed, lineup_index, weather, hitter_profile=None,
-                      opp_pitcher_profile=None, park_name=None):
+                      opp_pitcher_profile=None, park_name=None, opp_team=None):
     lineup_boost = _lineup_boost(stat_type, lineup_index)
     weather_boost, weather_note = _weather_adjustment(stat_type, weather)
     pitcher_adjustment, matchup_note = _pitcher_adjustment(stat_type, pitcher_hits_allowed)
@@ -591,6 +591,20 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     )
     hot_f = _hot_factor((hitter_profile or {}).get("hot_ratio"))
 
+    # ── Bullpen factor: 30-40% of late ABs are vs the opposing pen ──
+    # Hard cap the impact since the starter still owns most innings.
+    pen_f = 1.0
+    pen_note = None
+    if opp_team:
+        from src.bullpen_factors import get_bullpen_factor
+        pen_key = {"hits": "hits", "total_bases": "tb", "home_runs": "hr", "rbis": "tb", "strikeouts": "k"}.get(stat_type, "hits")
+        raw_pen = get_bullpen_factor(opp_team).get(pen_key, 1.0)
+        # Dilute toward 1.0 — the starter does most of the damage.
+        # 35% pen weight → if pen is 1.10, effective factor is 1.035.
+        pen_f = 1.0 + (raw_pen - 1.0) * 0.35
+        if abs(pen_f - 1.0) >= 0.025:
+            pen_note = f"opp pen {(pen_f - 1)*100:+.0f}%"
+
     # ── Power-allowed factor for TB / HR (decouples from generic hits-allowed) ──
     # Tells you whether this pitcher gives up cheap singles or barreled missiles.
     power_f = 1.0
@@ -605,7 +619,7 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
             # League avg hard-hit ~38%. Each 5pp diff ≈ 4% TB shift.
             power_f *= 1.0 + min(max((float(hha) - 0.38) * 0.8, -0.10), 0.12)
 
-    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * power_f)
+    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * power_f * pen_f)
 
     # Anti double-count: the K damper and the additive pitcher_adjustment both
     # encode pitcher quality. When the K damper has already pulled the projection
@@ -629,6 +643,8 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         factor_bits.append(f"trend {hot_f - 1:+.0%}")
     if abs(power_f - 1.0) >= 0.04:
         factor_bits.append(f"opp pwr {power_f - 1:+.0%}")
+    if pen_note:
+        factor_bits.append(pen_note)
     if xstat_used:
         factor_bits.append("xStats")
 
