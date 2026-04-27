@@ -370,6 +370,13 @@ def get_last5_hitter_profile(player_name):
             lsa = pd.to_numeric(bbe["launch_speed_angle"], errors="coerce").dropna()
             if len(lsa) > 0:
                 barrel_rate = float((lsa == 6).sum()) / float(len(lsa))
+        # Fly ball rate (launch angle ≥ 25°) — direct HR signal beyond barrels.
+        # Even non-barrel fly balls leave the yard in HR-friendly parks.
+        fly_ball_rate = None
+        if "launch_angle" in bbe.columns and len(bbe) > 0:
+            la = pd.to_numeric(bbe["launch_angle"], errors="coerce").dropna()
+            if len(la) > 0:
+                fly_ball_rate = float((la >= 25).sum()) / float(len(la))
         if "launch_speed" in bbe.columns and len(bbe) > 0:
             ls = pd.to_numeric(bbe["launch_speed"], errors="coerce").dropna()
             if len(ls) > 0:
@@ -403,6 +410,7 @@ def get_last5_hitter_profile(player_name):
             "xhits_avg": round(xhits_avg, 3) if xhits_avg is not None else None,
             "xtb_avg": round(xtb_avg, 3) if xtb_avg is not None else None,
             "barrel_rate": round(barrel_rate, 3) if barrel_rate is not None else None,
+            "fly_ball_rate": round(fly_ball_rate, 3) if fly_ball_rate is not None else None,
             "hard_hit_rate": round(hard_hit_rate, 3) if hard_hit_rate is not None else None,
             "bbe_per_game": round(float(bbe_per_game), 2) if bbe_per_game is not None else None,
         }

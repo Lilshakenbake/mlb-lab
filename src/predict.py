@@ -71,11 +71,21 @@ def compute_hr_threat(hitter_name, hitter_profile, opp_pitcher_name,
     raw = float(hitter_profile.get("hr_avg") or 0.0)
     bbl = hitter_profile.get("barrel_rate")
     bbe = hitter_profile.get("bbe_per_game")
+    fb = hitter_profile.get("fly_ball_rate")
 
-    # Blend raw HR/g with barrel-based xHR. Barrel rate is the #1 HR predictor.
+    # Three-source xHR blend: raw HR/g + barrels + fly balls. Catches sluggers
+    # whose recent HR count lags their underlying batted-ball quality.
+    sources = [raw]
     if bbl is not None and bbe is not None:
-        x_hr = float(bbl) * float(bbe) * 0.25
-        base = 0.50 * raw + 0.50 * x_hr
+        # ~25% of barrels become HR on average.
+        sources.append(float(bbl) * float(bbe) * 0.25)
+    if fb is not None and bbe is not None:
+        # ~10% of all fly balls leave the yard (HR/FB rate league avg).
+        sources.append(float(fb) * float(bbe) * 0.10)
+
+    if len(sources) > 1:
+        # Weighted: raw counts for half, the rest split between xHR signals.
+        base = 0.5 * raw + 0.5 * (sum(sources[1:]) / (len(sources) - 1))
     else:
         base = raw
 
@@ -86,18 +96,40 @@ def compute_hr_threat(hitter_name, hitter_profile, opp_pitcher_name,
     park_hr_f = _get_park_factor(park_name).get("hr", 1.0)
     expected = base * park_hr_f
 
+    # ── Pitcher power-allowed (NEW: wire in the new pitcher-profile fields) ──
+    opp = opp_pitcher_profile or {}
+    pitcher_note = None
+    hra = opp.get("hr_allowed_avg")
+    if hra is not None:
+        # League avg ≈ 0.13 HR/game/batter. A homer-prone arm (0.20+) bumps
+        # expected HR by 50%+; an ace (0.05) cuts it by ~50%.
+        hr_pitcher_mult = 1.0 + min(max((float(hra) - 0.13) * 4.0, -0.45), 0.55)
+        expected *= hr_pitcher_mult
+        if abs(hr_pitcher_mult - 1.0) >= 0.10:
+            pitcher_note = f"opp HR/g {float(hra):.2f}"
+    hha = opp.get("hard_hit_allowed")
+    if hha is not None:
+        # Each 5pp above league avg ~38% hard-hit rate = +6% expected HR.
+        expected *= 1.0 + min(max((float(hha) - 0.38) * 1.2, -0.12), 0.15)
+
     # Platoon (lefty bat vs righty pitcher = HR boost, etc.).
     expected *= _platoon_factor(
         "home_runs",
         hitter_profile.get("hand"),
-        (opp_pitcher_profile or {}).get("hand"),
+        opp.get("hand"),
     )
 
     # Strikeout-heavy starter suppresses HR; soft-tosser inflates.
     expected *= _pitcher_k_damper(
         "home_runs",
-        (opp_pitcher_profile or {}).get("strikeouts_avg"),
+        opp.get("strikeouts_avg"),
     )
+
+    # Hot/cold streak — recent form bump.
+    hot = hitter_profile.get("hot_ratio")
+    if hot is not None:
+        # hot_ratio > 1.2 = on a heater; < 0.8 = ice cold.
+        expected *= 1.0 + min(max((float(hot) - 1.0) * 0.20, -0.15), 0.18)
 
     # Lineup spot — top of order gets PA volume; heart of order gets best counts.
     spot = lineup_index + 1
@@ -108,6 +140,7 @@ def compute_hr_threat(hitter_name, hitter_profile, opp_pitcher_name,
 
     # Wind out to CF.
     wind_note = None
+    temp_note = None
     if weather and not weather.get("is_indoor"):
         out_comp = _wind_out_component(
             park_name,
@@ -120,6 +153,19 @@ def compute_hr_threat(hitter_name, hitter_profile, opp_pitcher_name,
                 direction = "out to CF" if out_comp > 0 else "in from CF"
                 wind_note = f"Wind {abs(out_comp):.0f}mph {direction}"
 
+        # Temperature — hot air carries the ball further. Each 10°F over 70
+        # adds ~1.5% to HR rate; each 10°F under 60 cuts ~2%.
+        temp = weather.get("temperature")
+        if temp is not None:
+            t = float(temp)
+            if t >= 80:
+                expected *= 1.0 + min((t - 70) * 0.0015, 0.06)
+                if t >= 90:
+                    temp_note = f"{int(t)}°F"
+            elif t <= 55:
+                expected *= max(1.0 + (t - 70) * 0.002, 0.88)
+                temp_note = f"{int(t)}°F cold"
+
     expected = max(0.005, expected)
     # Poisson: P(at least 1 HR) = 1 - e^(-lambda)
     prob = 1.0 - math.exp(-expected)
@@ -128,10 +174,18 @@ def compute_hr_threat(hitter_name, hitter_profile, opp_pitcher_name,
     reasons = []
     if bbl is not None and float(bbl) >= 0.10:
         reasons.append(f"barrel {float(bbl)*100:.0f}%")
+    if fb is not None and float(fb) >= 0.40:
+        reasons.append(f"FB {float(fb)*100:.0f}%")
     if abs(park_hr_f - 1.0) >= 0.05:
         reasons.append(f"park {(park_hr_f - 1)*100:+.0f}%")
+    if pitcher_note:
+        reasons.append(pitcher_note)
     if wind_note:
         reasons.append(wind_note)
+    if temp_note:
+        reasons.append(temp_note)
+    if hot is not None and float(hot) >= 1.25:
+        reasons.append("hot")
 
     return {
         "player": hitter_name,
