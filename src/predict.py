@@ -158,9 +158,26 @@ def _xstat_blend(stat_type, base_projection, hitter_profile):
             return 0.6 * base_projection + 0.4 * float(x)
 
     elif stat_type == "total_bases":
+        # Multi-source TB blend: xTB (luck-stripped) + barrel power + ISO.
+        # Each component captures a different signal, so combining them
+        # shakes TB free of pure hits-correlation.
         x = hitter_profile.get("xtb_avg")
+        bbl = hitter_profile.get("barrel_rate")
+        bbe = hitter_profile.get("bbe_per_game")
+        iso = hitter_profile.get("iso_power")  # avg extra bases per hit
+        # A barrel produces ~1.5 bases on average (25% HR=4, ~50% double=2, rest=0).
+        x_power = float(bbl) * float(bbe) * 1.5 if (bbl is not None and bbe is not None) else None
+        # ISO bumps the projection multiplicatively: 0.4+ ISO is elite slugger.
+        iso_mult = 1.0 + 0.35 * float(iso) if iso is not None else 1.0
+
+        if x is not None and x_power is not None:
+            blended = 0.45 * base_projection + 0.30 * float(x) + 0.25 * x_power
+            return blended * iso_mult
         if x is not None:
-            return 0.6 * base_projection + 0.4 * float(x)
+            return (0.6 * base_projection + 0.4 * float(x)) * iso_mult
+        if x_power is not None:
+            return (0.7 * base_projection + 0.3 * x_power) * iso_mult
+        return base_projection * iso_mult
 
     elif stat_type == "home_runs":
         # Barrel rate is the single best HR predictor — about 25% of barrels
@@ -419,8 +436,15 @@ def _pitcher_adjustment(stat_type, pitcher_hits_allowed):
         return 0.0, "Neutral matchup"
 
     if stat_type == "total_bases":
+        # Wider buckets so aces really damp TB and homer-prone arms boost it.
+        # Note: this is the legacy hits-only path; the richer power-allowed
+        # adjustment lives in build_hitter_prop via opp_pitcher_profile.
+        if pitcher_hits_allowed >= 8.0:
+            return 0.30, "Very weak opposing pitcher"
         if pitcher_hits_allowed >= 7.0:
             return 0.22, "Weak opposing pitcher"
+        elif pitcher_hits_allowed <= 3.5:
+            return -0.28, "Elite opposing pitcher"
         elif pitcher_hits_allowed <= 4.0:
             return -0.18, "Strong opposing pitcher"
         return 0.0, "Neutral matchup"
@@ -489,7 +513,22 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         (opp_pitcher_profile or {}).get("hand"),
     )
     hot_f = _hot_factor((hitter_profile or {}).get("hot_ratio"))
-    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f)
+
+    # ── Power-allowed factor for TB / HR (decouples from generic hits-allowed) ──
+    # Tells you whether this pitcher gives up cheap singles or barreled missiles.
+    power_f = 1.0
+    if stat_type in ("total_bases", "home_runs"):
+        opp = opp_pitcher_profile or {}
+        hra = opp.get("hr_allowed_avg")
+        hha = opp.get("hard_hit_allowed")
+        if hra is not None:
+            # League avg ~1.1 HR/9 ≈ 0.13 HR/game/batter. Above = boost, below = damp.
+            power_f *= 1.0 + min(max((float(hra) - 0.13) * 1.6, -0.18), 0.22)
+        if hha is not None:
+            # League avg hard-hit ~38%. Each 5pp diff ≈ 4% TB shift.
+            power_f *= 1.0 + min(max((float(hha) - 0.38) * 0.8, -0.10), 0.12)
+
+    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * power_f)
 
     # Anti double-count: the K damper and the additive pitcher_adjustment both
     # encode pitcher quality. When the K damper has already pulled the projection
@@ -511,6 +550,8 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         factor_bits.append(f"platoon {platoon_f - 1:+.0%}")
     if abs(hot_f - 1.0) >= 0.04:
         factor_bits.append(f"trend {hot_f - 1:+.0%}")
+    if abs(power_f - 1.0) >= 0.04:
+        factor_bits.append(f"opp pwr {power_f - 1:+.0%}")
     if xstat_used:
         factor_bits.append("xStats")
 

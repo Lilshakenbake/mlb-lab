@@ -375,6 +375,12 @@ def get_last5_hitter_profile(player_name):
             if len(ls) > 0:
                 hard_hit_rate = float((ls >= 95).sum()) / float(len(ls))
 
+        # Pure extra-base power — separates singles hitters from sluggers.
+        # iso = (TB - hits) / hits = avg extra bases per hit.
+        hits_mean = float(hits_by_game.mean()) or 0.0
+        tb_mean = float(tb_by_game.mean()) or 0.0
+        iso_power = (tb_mean - hits_mean) / hits_mean if hits_mean > 0 else 0.0
+
         profile = {
             "hits_avg": round(float(hits_by_game.mean()), 2),
             "hr_avg": round(float(hr_by_game.mean()), 2),
@@ -382,6 +388,7 @@ def get_last5_hitter_profile(player_name):
             "rbi_avg": round(float(rbi_by_game.mean()), 2),
             "hits_std": round(float(hits_by_game.std() or 0.0), 2),
             "tb_std": round(float(tb_by_game.std() or 0.0), 2),
+            "iso_power": round(iso_power, 3),
             "hand": _safe_hand(df, "stand"),  # L/R/S
             "hot_ratio": round(hot_ratio, 2),
             "games_used": int(len(hits_by_game)),
@@ -428,10 +435,44 @@ def get_last5_pitcher_profile(pitcher_name):
         if len(strikeouts_by_game) == 0:
             return None, "No recent pitcher games found"
 
+        # ── Power-allowed metrics — separate aces from contact-friendly arms ──
+        # Pulled from the SAME Statcast DF, no new HTTP.
+        hr_allowed_by_game = grouped["events"].apply(
+            lambda x: x.isin(["home_run"]).sum()
+        ).tail(8)
+        tb_allowed_by_game = grouped["events"].apply(
+            lambda x: (
+                (x == "single").sum() * 1
+                + (x == "double").sum() * 2
+                + (x == "triple").sum() * 3
+                + (x == "home_run").sum() * 4
+            )
+        ).tail(8)
+
+        bbe_p = df[df["type"] == "X"] if "type" in df.columns else df
+        xwoba_allowed = pd.to_numeric(
+            df.get("estimated_woba_using_speedangle"), errors="coerce"
+        ).dropna() if "estimated_woba_using_speedangle" in df.columns else None
+        hard_hit_allowed = None
+        barrel_allowed = None
+        if "launch_speed" in bbe_p.columns and len(bbe_p) > 0:
+            ls = pd.to_numeric(bbe_p["launch_speed"], errors="coerce").dropna()
+            if len(ls) > 0:
+                hard_hit_allowed = float((ls >= 95).sum()) / float(len(ls))
+        if "launch_speed_angle" in bbe_p.columns and len(bbe_p) > 0:
+            lsa = pd.to_numeric(bbe_p["launch_speed_angle"], errors="coerce").dropna()
+            if len(lsa) > 0:
+                barrel_allowed = float((lsa == 6).sum()) / float(len(lsa))
+
         profile = {
             "hits_allowed_avg": round(float(hits_allowed_by_game.mean()), 2),
+            "tb_allowed_avg": round(float(tb_allowed_by_game.mean()), 2),
+            "hr_allowed_avg": round(float(hr_allowed_by_game.mean()), 3),
             "strikeouts_avg": round(float(strikeouts_by_game.mean()), 2),
             "k_std": round(float(strikeouts_by_game.std() or 0.0), 2),
+            "xwoba_allowed": round(float(xwoba_allowed.mean()), 3) if xwoba_allowed is not None and len(xwoba_allowed) else None,
+            "hard_hit_allowed": round(hard_hit_allowed, 3) if hard_hit_allowed is not None else None,
+            "barrel_allowed": round(barrel_allowed, 3) if barrel_allowed is not None else None,
             "hand": _safe_hand(df, "p_throws"),  # L/R
             "games_used": int(len(strikeouts_by_game)),
         }
