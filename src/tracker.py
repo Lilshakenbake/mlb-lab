@@ -41,17 +41,57 @@ def units_for(result: str, american_odds, stake: float = 1.0) -> float:
     return 0.0  # PUSH or pending
 
 
-def suggest_units(probability) -> float:
-    """Auto-suggest stake size from confidence %. Recreational-sharp tiering."""
+def suggest_units(probability, edge=None, odds=None) -> float:
+    """Confidence-weighted stake sizing with edge and odds awareness.
+
+    Combines three signals:
+      • Probability — how confident the model is (0–100)
+      • Edge — projection vs line gap (in stat units, e.g. 0.4 hits)
+      • Odds — payout matters (a -200 fav needs a bigger stake to mean anything)
+
+    Output range: 0.25u – 4.0u. Big-edge high-confidence plays get real money;
+    coin-flip picks get a sprinkle so the bankroll spreads across the board."""
     try:
         p = float(probability or 0)
     except (TypeError, ValueError):
         p = 0.0
-    if p >= 70: return 2.0
-    if p >= 65: return 1.5
-    if p >= 60: return 1.0
-    if p >= 55: return 0.5
-    return 0.5
+    try:
+        e = abs(float(edge)) if edge is not None else 0.0
+    except (TypeError, ValueError):
+        e = 0.0
+
+    # Base unit from probability tier (the "confidence floor")
+    if p >= 72: base = 2.5
+    elif p >= 67: base = 2.0
+    elif p >= 62: base = 1.5
+    elif p >= 57: base = 1.0
+    elif p >= 53: base = 0.5
+    else: base = 0.25
+
+    # Edge multiplier — a 0.5+ stat-unit edge is huge, double the stake.
+    # 0.2 edge ≈ league average, no boost. <0.1 = shrink.
+    if e >= 0.50: edge_mult = 1.6
+    elif e >= 0.35: edge_mult = 1.3
+    elif e >= 0.20: edge_mult = 1.0
+    elif e >= 0.10: edge_mult = 0.85
+    else: edge_mult = 0.7
+
+    # Odds adjustment — small bumps so heavy favs still mean something,
+    # underdogs don't get oversized (variance protection).
+    odds_mult = 1.0
+    if odds is not None:
+        try:
+            o = float(odds)
+            if o <= -200: odds_mult = 1.15      # need bigger stake for thin payout
+            elif o <= -150: odds_mult = 1.05
+            elif o >= 150: odds_mult = 0.85     # variance — trim plus-money
+            elif o >= 250: odds_mult = 0.65
+        except (TypeError, ValueError):
+            pass
+
+    units = base * edge_mult * odds_mult
+    # Hard caps: never less than 0.25u, never more than 4u (bankroll safety).
+    return round(max(0.25, min(4.0, units)), 2)
 
 
 def _ensure_dir():
@@ -140,7 +180,8 @@ def add_play(payload: dict) -> dict:
     prob = _to_float(payload.get("probability")) or 0.0
     units_in = _to_float(payload.get("units"))
     if units_in is None or units_in <= 0:
-        units_in = suggest_units(prob)
+        edge_in = _to_float(payload.get("edge"))
+        units_in = suggest_units(prob, edge=edge_in, odds=odds_in)
     row = {
         "created_at": datetime.utcnow().isoformat(timespec="seconds"),
         "game_pk": payload.get("game_pk"),
