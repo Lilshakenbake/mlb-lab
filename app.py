@@ -9,6 +9,7 @@ from src import tracker, grader
 from src.mlb_data import (
     get_todays_games,
     get_team_active_hitters,
+    get_confirmed_starting_hitters,
     get_last5_hitter_profile,
     get_last5_pitcher_profile,
     get_game_weather,
@@ -21,8 +22,9 @@ from src.predict import (
     compute_hr_threat,
 )
 
-PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "6"))
+PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "16"))
 PROFILE_FETCH_WORKERS = int(os.getenv("PROFILE_FETCH_WORKERS", "2"))
+HITTERS_PER_TEAM = int(os.getenv("HITTERS_PER_TEAM", "5"))
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
@@ -93,7 +95,47 @@ def _fetch_hitter_profile_safe(name):
         return name, None
 
 
-def get_projected_top_hitters(team_id, limit=3):
+def get_projected_top_hitters(team_id, limit=HITTERS_PER_TEAM, game_pk=None, side=None):
+    """Resolve which hitters from this team to grade.
+
+    Priority:
+    1. Confirmed starting lineup from MLB (if game_pk + side given) — gives us
+       all 9 actual starters in batting order. This is what was missing before:
+       even when MLB posted lineups, we ignored them and guessed off the roster.
+    2. Fall back to scanning the active roster and ranking by recent production.
+
+    `limit` caps how many hitters we return per team (default 5 — bumped from 3
+    so stars buried in the order still show up). When confirmed lineups are
+    available we return ALL nine starters so the dashboard mirrors the real
+    batting order; ranking happens in the prop-builders downstream.
+    """
+    # ── Path 1: confirmed lineup ────────────────────────────────────────
+    confirmed = []
+    if game_pk and side:
+        try:
+            confirmed = get_confirmed_starting_hitters(game_pk, side) or []
+        except Exception:
+            confirmed = []
+
+    if confirmed:
+        scored = []
+        with ThreadPoolExecutor(max_workers=PROFILE_FETCH_WORKERS) as pool:
+            futures = [pool.submit(_fetch_hitter_profile_safe, name) for name in confirmed]
+            results = {}
+            for fut in as_completed(futures):
+                name, profile = fut.result()
+                results[name] = profile
+        # Preserve batting-order sequence (MLB lineup ordering); skip blanks.
+        for name in confirmed:
+            profile = results.get(name)
+            if not profile or profile.get("games_used", 0) < 2:
+                continue
+            score = profile.get("hits_avg", 0) * 0.9 + profile.get("tb_avg", 0) * 1.1
+            scored.append((score, name, profile))
+        if scored:
+            return scored  # all confirmed starters with usable profiles
+
+    # ── Path 2: active-roster fallback ──────────────────────────────────
     hitters = get_team_active_hitters(team_id)[:PROJECTED_ROSTER_SCAN_LIMIT]
     if not hitters:
         return []
@@ -103,7 +145,9 @@ def get_projected_top_hitters(team_id, limit=3):
         futures = [pool.submit(_fetch_hitter_profile_safe, name) for name in hitters]
         for fut in as_completed(futures):
             name, profile = fut.result()
-            if not profile or profile.get("games_used", 0) < 3:
+            # Loosen min-games filter from 3 → 2 so call-ups & recent activations
+            # (which used to silently disappear) are eligible.
+            if not profile or profile.get("games_used", 0) < 2:
                 continue
             score = profile["hits_avg"] * 0.9 + profile["tb_avg"] * 1.1
             scored.append((score, name, profile))
@@ -134,10 +178,18 @@ def build_game_boards(game):
         except Exception:
             return None
 
+    game_pk_lookup = game.get("gamePk")
+
     with ThreadPoolExecutor(max_workers=BOARD_INNER_CONCURRENCY) as pool:
         f_weather = pool.submit(get_game_weather, game)
-        f_away_hitters = pool.submit(get_projected_top_hitters, game["away_team_id"], 3)
-        f_home_hitters = pool.submit(get_projected_top_hitters, game["home_team_id"], 3)
+        f_away_hitters = pool.submit(
+            get_projected_top_hitters, game["away_team_id"], HITTERS_PER_TEAM,
+            game_pk_lookup, "away",
+        )
+        f_home_hitters = pool.submit(
+            get_projected_top_hitters, game["home_team_id"], HITTERS_PER_TEAM,
+            game_pk_lookup, "home",
+        )
         f_away_pitcher = pool.submit(_safe_pitcher, away_pitcher_name)
         f_home_pitcher = pool.submit(_safe_pitcher, home_pitcher_name)
 
@@ -147,8 +199,10 @@ def build_game_boards(game):
         away_pitcher_profile = f_away_pitcher.result()
         home_pitcher_profile = f_home_pitcher.result()
 
-    lineup_confirmed = False
-    projected_mode = True
+    # If we got >= 5 hitters per side, MLB lineups are almost certainly posted
+    # (vs roster fallback which we cap at HITTERS_PER_TEAM).
+    lineup_confirmed = (len(away_hitters) >= 5 and len(home_hitters) >= 5)
+    projected_mode = not lineup_confirmed
 
     away_team_score = 0.0
     home_team_score = 0.0
