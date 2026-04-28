@@ -159,6 +159,15 @@
 
     <hr>
 
+    <h2>⭐ Daily Specials</h2>
+    <p class="sub">Best Run Line · 3-Leg Same Game Parlay · Best HR Pair</p>
+
+    <div id="specials" class="games-grid">
+        <div class="card empty" id="specials-loading">Loading specials…</div>
+    </div>
+
+    <hr>
+
     <h2>🔥 Home Run Threats</h2>
     <p class="sub">Tonight's most likely hitters to go yard, ranked by HR probability</p>
 
@@ -358,6 +367,99 @@
     };
 
     loadThreats();
+})();
+
+// ── Daily Specials (Run Line · 3-Leg SGP · HR Pair) ──────────────────
+(function () {
+    const grid = document.getElementById("specials");
+    if (!grid) return;
+
+    const escape = (s) => String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    const runLineCard = (rl) => {
+        if (!rl) return "";
+        const link = rl.game_pk ? `/game/${rl.game_pk}` : "#";
+        return `
+            <div class="card play-card">
+              <a href="${link}" style="text-decoration:none; color:inherit;">
+                <div>
+                  <div class="matchup" style="color:#60a5fa;">📏 Run Line of the Day</div>
+                  <div class="detail" style="font-size:14px; font-weight:600;">${escape(rl.headline)}</div>
+                  <div class="detail" style="color:#94a3b8; font-size:12px;">${escape(rl.matchup || "")}</div>
+                  <div class="detail"><strong>Fair odds:</strong> ${escape(rl.fair_odds)}</div>
+                </div>
+                <div class="prob-big" style="color:#60a5fa;">${escape(rl.probability)}%</div>
+              </a>
+            </div>`;
+    };
+
+    const sgpCard = (s) => {
+        if (!s) return "";
+        const link = s.game_pk ? `/game/${s.game_pk}` : "#";
+        const legs = (s.legs || []).map(l =>
+            `<div class="detail" style="font-size:12px;">• ${escape(l.player)} — ${escape(l.stat)} ${escape(l.pick)} <span style="color:#94a3b8;">(${escape(l.probability)}%)</span></div>`
+        ).join("");
+        return `
+            <div class="card play-card">
+              <a href="${link}" style="text-decoration:none; color:inherit;">
+                <div>
+                  <div class="matchup" style="color:#a78bfa;">🎯 3-Leg SGP of the Day</div>
+                  <div class="detail" style="color:#94a3b8; font-size:12px;">${escape(s.matchup || "")}</div>
+                  ${legs}
+                  <div class="detail"><strong>Fair odds:</strong> ${escape(s.fair_odds)} · <strong>Payout:</strong> +${escape(s.payout_units)}u on 1u</div>
+                </div>
+                <div class="prob-big" style="color:#a78bfa;">${escape(s.combined_probability)}%</div>
+              </a>
+            </div>`;
+    };
+
+    const hrPairCard = (h) => {
+        if (!h) return "";
+        const a = h.leg_a, b = h.leg_b;
+        return `
+            <div class="card play-card">
+              <div>
+                <div class="matchup" style="color:#fb923c;">💥 Best HR Pair</div>
+                <div class="detail" style="font-size:13px; font-weight:600;">${escape(a.player)} <span style="color:#94a3b8;">vs ${escape(a.vs)} (${escape(a.probability)}%)</span></div>
+                <div class="detail" style="font-size:13px; font-weight:600;">${escape(b.player)} <span style="color:#94a3b8;">vs ${escape(b.vs)} (${escape(b.probability)}%)</span></div>
+                <div class="detail"><strong>Fair odds:</strong> ${escape(h.fair_odds)} · <strong>Payout:</strong> +${escape(h.payout_units)}u on 1u</div>
+              </div>
+              <div class="prob-big" style="color:#fb923c;">${escape(h.combined_probability)}%</div>
+            </div>`;
+    };
+
+    const render = (specials) => {
+        const cards = [];
+        if (specials && specials.run_line) cards.push(runLineCard(specials.run_line));
+        if (specials && specials.sgp) cards.push(sgpCard(specials.sgp));
+        if (specials && specials.hr_pair) cards.push(hrPairCard(specials.hr_pair));
+        if (cards.length === 0) {
+            grid.innerHTML = '<div class="card empty">No specials yet — still computing.</div>';
+            return;
+        }
+        grid.innerHTML = cards.join("");
+    };
+
+    const loadSpecials = () => {
+        fetch("/api/specials", { credentials: "same-origin" })
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(data => {
+                render(data.specials || {});
+                const hasAny = data.specials && (data.specials.run_line || data.specials.sgp || data.specials.hr_pair);
+                if (data.computing && !hasAny) {
+                    grid.innerHTML = '<div class="card empty">Computing daily specials…</div>';
+                    setTimeout(loadSpecials, 8000);
+                } else if (data.computing) {
+                    setTimeout(loadSpecials, 15000);
+                }
+            })
+            .catch(() => {
+                grid.innerHTML = '<div class="card empty">Could not load specials. Refresh to retry.</div>';
+            });
+    };
+
+    loadSpecials();
 })();
 </script>
 

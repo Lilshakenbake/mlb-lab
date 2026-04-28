@@ -42,6 +42,7 @@ _PLAYS_LOCK = threading.Lock()
 # purely by probability of 1+ HR (not by line edge), since HR lines are almost
 # always 0.5 and the standard edge logic biases toward UNDER.
 HR_THREATS_CACHE = {"ts": 0, "data": []}
+SPECIALS_CACHE = {"ts": 0, "data": {"run_line": None, "sgp": None, "hr_pair": None}}
 HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "12"))
 
 STAT_LABELS = {
@@ -362,6 +363,130 @@ def _build_plays_for_game(game):
     return out
 
 
+def _prob_to_american(p):
+    """Convert decimal probability to fair American odds string."""
+    if not p or p <= 0 or p >= 1:
+        return "—"
+    if p >= 0.5:
+        return f"-{round(p / (1 - p) * 100)}"
+    return f"+{round((1 - p) / p * 100)}"
+
+
+def _parlay_payout_units(probs, leg_odds=-110, stake_units=1.0):
+    """Compute parlay payout in units for legs at given American odds.
+
+    Each -110 leg = 1.909x decimal; multiply legs and subtract stake."""
+    if leg_odds < 0:
+        leg_decimal = 1 + (100 / abs(leg_odds))
+    else:
+        leg_decimal = 1 + (leg_odds / 100)
+    parlay_decimal = leg_decimal ** len(probs)
+    profit = (parlay_decimal - 1) * stake_units
+    combined_prob = 1.0
+    for p in probs:
+        combined_prob *= (p / 100.0 if p > 1 else p)
+    return round(profit, 2), round(combined_prob * 100, 1)
+
+
+def _build_specials(sorted_plays, sorted_hr):
+    """Compute the three daily specials from already-collected data:
+       1. Best Run Line of the Day
+       2. Best 3-Leg Same-Game Parlay
+       3. Best HR Pair (2-leg)"""
+    specials = {"run_line": None, "sgp": None, "hr_pair": None}
+
+    # ── 1. Best Run Line ──────────────────────────────────────────────────
+    run_lines = [p for p in sorted_plays if p.get("kind") == "runline"]
+    if run_lines:
+        best_rl = run_lines[0]  # already sorted by probability
+        specials["run_line"] = {
+            "headline": best_rl.get("headline"),
+            "matchup": best_rl.get("matchup"),
+            "probability": best_rl.get("probability"),
+            "edge": best_rl.get("edge"),
+            "fair_odds": _prob_to_american((best_rl.get("probability") or 0) / 100.0),
+            "game_pk": best_rl.get("game_pk"),
+        }
+
+    # ── 2. Best 3-Leg SGP ─────────────────────────────────────────────────
+    # Group hitter/pitcher props by game; pick the game whose top-3 plays
+    # have the highest combined probability. Skip games with <3 quality plays.
+    by_game = {}
+    for p in sorted_plays:
+        if p.get("kind") in ("moneyline", "runline"):
+            continue  # SGP is props-only — cleaner correlation story
+        if (p.get("probability") or 0) < 60:
+            continue  # min quality bar per leg
+        gpk = p.get("game_pk")
+        if gpk is None:
+            continue
+        by_game.setdefault(gpk, []).append(p)
+
+    best_sgp_score = 0
+    for gpk, plays in by_game.items():
+        if len(plays) < 3:
+            continue
+        # Pick top 3 by probability — and ensure they're DIFFERENT players when possible.
+        seen_players = set()
+        chosen = []
+        for p in plays:
+            player = p.get("headline")
+            if player in seen_players:
+                continue
+            seen_players.add(player)
+            chosen.append(p)
+            if len(chosen) == 3:
+                break
+        if len(chosen) < 3:
+            continue
+        probs = [(p.get("probability") or 0) / 100.0 for p in chosen]
+        combined = probs[0] * probs[1] * probs[2]
+        # Score = combined prob × small bonus per "premium" leg (>=70%)
+        score = combined * (1 + 0.05 * sum(1 for p in probs if p >= 0.70))
+        if score > best_sgp_score:
+            best_sgp_score = score
+            payout, combined_pct = _parlay_payout_units(probs)
+            specials["sgp"] = {
+                "matchup": chosen[0].get("matchup"),
+                "game_pk": gpk,
+                "legs": [
+                    {
+                        "player": p.get("headline"),
+                        "stat": p.get("stat_label"),
+                        "pick": f'{p.get("pick")} {p.get("line")}',
+                        "probability": p.get("probability"),
+                    }
+                    for p in chosen
+                ],
+                "combined_probability": combined_pct,
+                "fair_odds": _prob_to_american(combined),
+                "payout_units": payout,  # profit on 1u stake at -110 each leg
+            }
+
+    # ── 3. Best HR Pair ───────────────────────────────────────────────────
+    if len(sorted_hr) >= 2:
+        # Top two HR threats — could be same or different games.
+        h1, h2 = sorted_hr[0], sorted_hr[1]
+        p1, p2 = (h1.get("probability") or 0) / 100.0, (h2.get("probability") or 0) / 100.0
+        combined = p1 * p2
+        # HR props are typically +400 each (≈20% implied) — much juicier.
+        avg_fair_odds = (h1.get("fair_odds") or 400)
+        try:
+            leg_odds = int(avg_fair_odds) if isinstance(avg_fair_odds, (int, float)) else 400
+        except (ValueError, TypeError):
+            leg_odds = 400
+        payout, combined_pct = _parlay_payout_units([p1, p2], leg_odds=leg_odds)
+        specials["hr_pair"] = {
+            "leg_a": {"player": h1.get("player"), "vs": h1.get("vs"), "park": h1.get("park"), "probability": h1.get("probability"), "fair_odds": h1.get("fair_odds")},
+            "leg_b": {"player": h2.get("player"), "vs": h2.get("vs"), "park": h2.get("park"), "probability": h2.get("probability"), "fair_odds": h2.get("fair_odds")},
+            "combined_probability": combined_pct,
+            "fair_odds": _prob_to_american(combined),
+            "payout_units": payout,
+        }
+
+    return specials
+
+
 def _refresh_plays_blocking():
     import gc
     try:
@@ -380,11 +505,14 @@ def _refresh_plays_blocking():
             entire slate scan to complete."""
             sorted_plays = sorted(all_plays, key=lambda p: p.get("probability", 0), reverse=True)
             sorted_hr = sorted(all_hr_threats, key=lambda x: x.get("probability", 0), reverse=True)
+            specials = _build_specials(sorted_plays, sorted_hr)
             with _PLAYS_LOCK:
                 PLAYS_CACHE["ts"] = time.time()
                 PLAYS_CACHE["data"] = sorted_plays[:PLAYS_LIMIT]
                 HR_THREATS_CACHE["ts"] = time.time()
                 HR_THREATS_CACHE["data"] = sorted_hr[:HR_THREATS_LIMIT]
+                SPECIALS_CACHE["ts"] = time.time()
+                SPECIALS_CACHE["data"] = specials
 
         def _absorb_game(g):
             """Run one game's board build and merge its plays + HR threats."""
@@ -475,6 +603,17 @@ def api_hr_threats():
 @login_required
 def api_plays_of_day():
     return jsonify(get_plays_of_day_snapshot())
+
+
+@app.route("/api/specials", methods=["GET"])
+@login_required
+def api_specials():
+    """Daily specials: best run line, 3-leg SGP, HR pair."""
+    with _PLAYS_LOCK:
+        data = dict(SPECIALS_CACHE["data"])
+        ts = SPECIALS_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+    return jsonify({"specials": data, "ts": ts, "computing": computing})
 
 
 @app.route("/admin/warm-cache", methods=["GET", "POST"])
