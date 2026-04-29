@@ -393,6 +393,38 @@ def get_last5_hitter_profile(player_name):
             if len(ls) > 0:
                 hard_hit_rate = float((ls >= 95).sum()) / float(len(ls))
 
+        # ── Handedness splits — biggest single accuracy boost. ────────────
+        # A LHH facing a LHP loses ~25-30% of expected production. Built from
+        # the same DF, no new HTTP. Falls back to None when sample is too thin
+        # to be meaningful (so the predictor knows to skip the adjustment).
+        splits = {"vs_L": {}, "vs_R": {}}
+        if "p_throws" in df.columns:
+            for hand_key, hand_val in [("vs_L", "L"), ("vs_R", "R")]:
+                hand_df = df[df["p_throws"] == hand_val]
+                if len(hand_df) < 25:  # too thin; skip
+                    continue
+                hand_grouped = hand_df.groupby("game_date")
+                h_hits = hand_grouped["events"].apply(
+                    lambda x: x.isin(["single", "double", "triple", "home_run"]).sum()
+                )
+                h_hr = hand_grouped["events"].apply(
+                    lambda x: x.isin(["home_run"]).sum()
+                )
+                h_tb = hand_grouped["events"].apply(
+                    lambda x: (
+                        (x == "single").sum() * 1
+                        + (x == "double").sum() * 2
+                        + (x == "triple").sum() * 3
+                        + (x == "home_run").sum() * 4
+                    )
+                )
+                splits[hand_key] = {
+                    "hits_avg": round(float(h_hits.mean()), 2) if len(h_hits) else None,
+                    "hr_avg": round(float(h_hr.mean()), 3) if len(h_hr) else None,
+                    "tb_avg": round(float(h_tb.mean()), 2) if len(h_tb) else None,
+                    "samples": int(len(hand_df)),
+                }
+
         # Pure extra-base power — separates singles hitters from sluggers.
         # iso = (TB - hits) / hits = avg extra bases per hit.
         hits_mean = float(hits_by_game.mean()) or 0.0
@@ -424,6 +456,7 @@ def get_last5_hitter_profile(player_name):
             "fly_ball_rate": round(fly_ball_rate, 3) if fly_ball_rate is not None else None,
             "hard_hit_rate": round(hard_hit_rate, 3) if hard_hit_rate is not None else None,
             "bbe_per_game": round(float(bbe_per_game), 2) if bbe_per_game is not None else None,
+            "splits": splits,  # vs_L / vs_R handedness performance
         }
 
         BatterProfileCache[player_name] = profile
@@ -500,6 +533,54 @@ def get_last5_pitcher_profile(pitcher_name):
             if len(lsa) > 0:
                 barrel_allowed = float((lsa == 6).sum()) / float(len(lsa))
 
+        # ── First-inning metrics for NRFI predictions ─────────────────────
+        # Compute runs allowed per first inning across recent starts. We use
+        # bat_score progression since Statcast doesn't have a direct "runs"
+        # field — last pitch's post_bat_score minus first pitch's bat_score
+        # in that (game, inning=1) slice = runs scored that half-inning.
+        first_inning_runs_avg = None
+        nrfi_solo_rate = None  # % of starts where pitcher held the 1st scoreless
+        if "inning" in df.columns and "bat_score" in df.columns and "post_bat_score" in df.columns:
+            inn1 = df[df["inning"] == 1]
+            if len(inn1) > 0:
+                runs_per_start = []
+                sort_cols = [c for c in ("at_bat_number", "pitch_number") if c in inn1.columns]
+                for _, gdf in inn1.groupby("game_date"):
+                    gdf2 = gdf.sort_values(sort_cols) if sort_cols else gdf
+                    try:
+                        first_score = float(pd.to_numeric(gdf2["bat_score"], errors="coerce").iloc[0])
+                        last_score = float(pd.to_numeric(gdf2["post_bat_score"], errors="coerce").iloc[-1])
+                        runs = max(0.0, last_score - first_score)
+                        runs_per_start.append(runs)
+                    except Exception:
+                        continue
+                if runs_per_start:
+                    runs_per_start = runs_per_start[-8:]  # last 8 starts only
+                    first_inning_runs_avg = round(sum(runs_per_start) / len(runs_per_start), 2)
+                    nrfi_solo_rate = round(
+                        sum(1 for r in runs_per_start if r == 0) / len(runs_per_start), 3
+                    )
+
+        # ── Handedness splits — pitcher's performance vs L vs R hitters ───
+        pitcher_splits = {"vs_L": {}, "vs_R": {}}
+        if "stand" in df.columns:
+            for hand_key, hand_val in [("vs_L", "L"), ("vs_R", "R")]:
+                hand_df = df[df["stand"] == hand_val]
+                if len(hand_df) < 25:
+                    continue
+                hg = hand_df.groupby("game_date")
+                h_hits = hg["events"].apply(
+                    lambda x: x.isin(["single", "double", "triple", "home_run"]).sum()
+                )
+                h_hr = hg["events"].apply(
+                    lambda x: x.isin(["home_run"]).sum()
+                )
+                pitcher_splits[hand_key] = {
+                    "hits_allowed_avg": round(float(h_hits.mean()), 2) if len(h_hits) else None,
+                    "hr_allowed_avg": round(float(h_hr.mean()), 3) if len(h_hr) else None,
+                    "samples": int(len(hand_df)),
+                }
+
         profile = {
             "hits_allowed_avg": round(_weighted_mean(hits_allowed_by_game), 2),
             "tb_allowed_avg": round(_weighted_mean(tb_allowed_by_game), 2),
@@ -511,6 +592,9 @@ def get_last5_pitcher_profile(pitcher_name):
             "barrel_allowed": round(barrel_allowed, 3) if barrel_allowed is not None else None,
             "hand": _safe_hand(df, "p_throws"),  # L/R
             "games_used": int(len(strikeouts_by_game)),
+            "first_inning_runs_avg": first_inning_runs_avg,
+            "nrfi_solo_rate": nrfi_solo_rate,
+            "splits": pitcher_splits,
         }
 
         PitcherProfileCache[pitcher_name] = profile

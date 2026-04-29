@@ -177,6 +177,15 @@
 
     <hr>
 
+    <h2>🥶 NRFI / YRFI Watch</h2>
+    <p class="sub">No-Runs-First-Inning probability for every game tonight (best NRFI calls show in green)</p>
+
+    <div id="nrfi-board" class="games-grid">
+        <div class="card empty" id="nrfi-loading">Loading NRFI board…</div>
+    </div>
+
+    <hr>
+
     <h2>Today’s Slate</h2>
 
     {% if games %}
@@ -367,6 +376,67 @@
     };
 
     loadThreats();
+})();
+
+// ── NRFI / YRFI Watch ────────────────────────────────────────────────
+(function () {
+    const grid = document.getElementById("nrfi-board");
+    if (!grid) return;
+
+    const escape = (s) => String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    const cardHtml = (n) => {
+        const link = n.game_pk ? `/game/${n.game_pk}` : "#";
+        const isNrfi = n.pick === "NRFI";
+        const color = isNrfi ? "#34d399" : "#fb7185";
+        const why = n.why ? `<div class="detail" style="font-size:11px; color:#94a3b8;">${escape(n.why)}</div>` : "";
+        const fair = n.fair_odds ? `<div class="detail"><strong>Fair odds:</strong> ${escape(n.fair_odds)}</div>` : "";
+        return `
+            <div class="card play-card" style="border-left:4px solid ${color};">
+              <a href="${link}" style="text-decoration:none; color:inherit;">
+                <div>
+                  <div class="matchup" style="color:${color};">${escape(n.pick)} · ${escape(n.matchup || "")}</div>
+                  <div class="detail" style="font-size:12px;">
+                    ${escape(n.away_pitcher || "TBD")} vs ${escape(n.home_pitcher || "TBD")}
+                  </div>
+                  <div class="detail" style="font-size:12px;">
+                    Expected 1st-inning runs: <strong>${escape(n.expected_first_inning_runs)}</strong>
+                  </div>
+                  ${fair}
+                  ${why}
+                </div>
+                <div class="prob-big" style="color:${color};">${escape(n.probability)}%</div>
+              </a>
+            </div>`;
+    };
+
+    const render = (entries) => {
+        if (!entries || entries.length === 0) {
+            grid.innerHTML = '<div class="card empty">No NRFI data yet — still computing.</div>';
+            return;
+        }
+        grid.innerHTML = entries.map(cardHtml).join("");
+    };
+
+    const loadNrfi = () => {
+        fetch("/api/nrfi", { credentials: "same-origin" })
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(data => {
+                render(data.nrfi || []);
+                if (data.computing && (!data.nrfi || data.nrfi.length === 0)) {
+                    grid.innerHTML = '<div class="card empty">Computing NRFI board… refreshing automatically.</div>';
+                    setTimeout(loadNrfi, 8000);
+                } else if (data.computing) {
+                    setTimeout(loadNrfi, 15000);
+                }
+            })
+            .catch(() => {
+                grid.innerHTML = '<div class="card empty">Could not load NRFI board. Refresh to retry.</div>';
+            });
+    };
+
+    loadNrfi();
 })();
 
 // ── Daily Specials (Run Line · 3-Leg SGP · HR Pair) ──────────────────

@@ -274,9 +274,12 @@ def _xstat_blend(stat_type, base_projection, hitter_profile):
     return base_projection
 
 
-def _platoon_factor(stat_type, batter_hand, pitcher_hand):
-    """Multiplicative platoon adjustment. Same-hand matchup hurts hitter,
-    opposite-hand helps. Switch hitters always face opposite hand → small boost."""
+def _platoon_factor(stat_type, batter_hand, pitcher_hand,
+                    hitter_profile=None, pitcher_profile=None):
+    """Multiplicative platoon adjustment. Uses REAL handedness splits when
+    both profiles carry them (~75% weight) and falls back to league averages
+    otherwise. A LHH facing a tough LHP can drop production 25-30%.
+    """
     if not batter_hand or not pitcher_hand:
         return 1.0
     bh = batter_hand.upper()
@@ -286,15 +289,70 @@ def _platoon_factor(stat_type, batter_hand, pitcher_hand):
     else:
         same = (bh == ph)
 
+    # League-average platoon penalty/bonus (fallback when no splits).
     if stat_type == "hits":
-        return 0.93 if same else 1.05
-    if stat_type == "total_bases":
-        return 0.91 if same else 1.06
-    if stat_type == "home_runs":
-        return 0.85 if same else 1.10
-    if stat_type == "rbis":
-        return 0.93 if same else 1.05
-    return 1.0
+        league_factor = 0.93 if same else 1.05
+    elif stat_type == "total_bases":
+        league_factor = 0.91 if same else 1.06
+    elif stat_type == "home_runs":
+        league_factor = 0.85 if same else 1.10
+    elif stat_type == "rbis":
+        league_factor = 0.93 if same else 1.05
+    else:
+        return 1.0
+
+    # ── Real-data override: use the hitter's actual vs-L / vs-R averages
+    # compared to their overall average. Same for pitcher.
+    if not hitter_profile and not pitcher_profile:
+        return league_factor
+
+    pitcher_hand_key = f"vs_{ph}"  # pitcher hand → which split of the hitter to use
+    batter_hand_key = f"vs_{bh}"   # batter hand → which split of the pitcher to use
+
+    stat_field_map = {
+        "hits": "hits_avg",
+        "total_bases": "tb_avg",
+        "home_runs": "hr_avg",
+        "rbis": "hits_avg",  # rbis use hits as proxy for handedness scaling
+    }
+    pitcher_stat_map = {
+        "hits": "hits_allowed_avg",
+        "total_bases": "hits_allowed_avg",
+        "home_runs": "hr_allowed_avg",
+        "rbis": "hits_allowed_avg",
+    }
+
+    hitter_ratio = None
+    h_splits = (hitter_profile or {}).get("splits") or {}
+    h_split = h_splits.get(pitcher_hand_key) or {}
+    field = stat_field_map.get(stat_type)
+    if field and h_split.get(field) and (hitter_profile or {}).get(field):
+        overall = float(hitter_profile[field])
+        split_val = float(h_split[field])
+        if overall > 0:
+            hitter_ratio = split_val / overall  # >1 = hitter likes this hand
+
+    pitcher_ratio = None
+    p_splits = (pitcher_profile or {}).get("splits") or {}
+    p_split = p_splits.get(batter_hand_key) or {}
+    pfield = pitcher_stat_map.get(stat_type)
+    if pfield and p_split.get(pfield) and (pitcher_profile or {}).get(pfield):
+        p_overall = float(pitcher_profile[pfield])
+        p_split_val = float(p_split[pfield])
+        if p_overall > 0:
+            pitcher_ratio = p_split_val / p_overall  # >1 = pitcher worse vs this hand
+
+    real_factors = [r for r in (hitter_ratio, pitcher_ratio) if r is not None]
+    if not real_factors:
+        return league_factor
+
+    # Average the real-data ratios, dampen toward 1.0 (sample noise), then
+    # blend 75/25 with the league-average factor.
+    real = sum(real_factors) / len(real_factors)
+    real_dampened = 1.0 + (real - 1.0) * 0.7  # pull 30% toward neutral
+    blended = 0.75 * real_dampened + 0.25 * league_factor
+    # Hard cap so noisy splits can't blow up a projection.
+    return max(0.78, min(1.22, blended))
 
 
 def _pitcher_k_damper(stat_type, opp_pitcher_k_avg):
@@ -588,6 +646,8 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         stat_type,
         (hitter_profile or {}).get("hand"),
         (opp_pitcher_profile or {}).get("hand"),
+        hitter_profile=hitter_profile,
+        pitcher_profile=opp_pitcher_profile,
     )
     hot_f = _hot_factor((hitter_profile or {}).get("hot_ratio"))
 
@@ -678,6 +738,11 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     else:
         probability = edge_to_probability(stat_type, edge)
 
+    # ── Confidence cap: a single-game prop with a tiny sample of stats
+    # should NEVER read like a 90% lock. Keep the displayed probability in
+    # the realistic range so the user never bets the farm on overfit noise.
+    probability = max(min(probability, 78.0), 22.0)
+
     note_parts = [matchup_note, weather_note]
     if factor_bits:
         note_parts.append(", ".join(factor_bits))
@@ -735,6 +800,9 @@ def build_pitcher_k_prop(pitcher_name, line, projection, weather, pitcher_profil
         probability = _ml.over_probability(adjusted_projection, line, model_std)
     else:
         probability = edge_to_probability("pitcher_strikeouts", edge)
+
+    # Confidence cap — same reasoning as hitter props.
+    probability = max(min(probability, 78.0), 22.0)
 
     return {
         "pitcher": pitcher_name,
@@ -844,4 +912,89 @@ def build_spread_lean(game, home_team_score, away_team_score, home_pitcher_profi
         "margin": margin,
         "confidence": confidence,
         "note": weather_note,
+    }
+
+def compute_nrfi(game, home_pitcher_profile, away_pitcher_profile, weather, park_name=None):
+    """Compute No-Runs-First-Inning probability for a game.
+
+    Returns a dict with `pick` ("NRFI" or "YRFI"), `probability` (0-100),
+    `expected_first_inning_runs` (combined), and a short `why` string.
+
+    Each starter has a `nrfi_solo_rate` (% of recent starts where they held
+    the 1st scoreless). NRFI for the game requires BOTH halves of the 1st
+    to be scoreless, so we multiply the two rates and apply small park /
+    weather adjustments.
+    """
+    if not home_pitcher_profile or not away_pitcher_profile:
+        return None
+
+    home_solo = home_pitcher_profile.get("nrfi_solo_rate")
+    away_solo = away_pitcher_profile.get("nrfi_solo_rate")
+    home_runs_avg = home_pitcher_profile.get("first_inning_runs_avg")
+    away_runs_avg = away_pitcher_profile.get("first_inning_runs_avg")
+
+    # If we don't have direct NRFI data, fall back to a derivation from the
+    # pitcher's overall runs allowed per game divided across 9 innings (only
+    # ~58% of starters keep the 1st scoreless league-wide).
+    if home_solo is None:
+        ha = home_pitcher_profile.get("hits_allowed_avg", 8.0)
+        # Rough heuristic — soft contact, low hits: high NRFI rate.
+        home_solo = max(0.40, min(0.78, 0.62 - (float(ha) - 8.0) * 0.025))
+    if away_solo is None:
+        ha = away_pitcher_profile.get("hits_allowed_avg", 8.0)
+        away_solo = max(0.40, min(0.78, 0.62 - (float(ha) - 8.0) * 0.025))
+    if home_runs_avg is None:
+        home_runs_avg = (float(home_pitcher_profile.get("hits_allowed_avg", 8.0)) / 9.0) * 1.1
+    if away_runs_avg is None:
+        away_runs_avg = (float(away_pitcher_profile.get("hits_allowed_avg", 8.0)) / 9.0) * 1.1
+
+    # Combined NRFI prob assumes innings independent. Slight regression toward
+    # the league mean (~52% NRFI overall) for tiny samples.
+    nrfi_raw = float(home_solo) * float(away_solo)
+    nrfi_prob = 0.85 * nrfi_raw + 0.15 * 0.52
+
+    # ── Park adjustments ─────────────────────────────────────────────────
+    # Hitter-friendly parks reduce NRFI; pitcher-friendly parks raise it.
+    park_factors = _get_park_factor(park_name) if park_name else {}
+    park_runs_factor = park_factors.get("hits", 1.0)  # use hits as runs proxy
+    if park_runs_factor:
+        # Park factor 1.10 → 10% boost in offense → ~6% drop in NRFI prob.
+        nrfi_prob *= (1.0 - (float(park_runs_factor) - 1.0) * 0.6)
+
+    # ── Weather adjustments ─────────────────────────────────────────────
+    why_bits = []
+    if weather and not weather.get("is_indoor"):
+        temp = float(weather.get("temperature", 70) or 70)
+        wind = float(weather.get("wind_speed", 0) or 0)
+        if temp >= 82 and wind >= 10:
+            nrfi_prob *= 0.92
+            why_bits.append("hot+wind")
+        elif temp <= 52:
+            nrfi_prob *= 1.06
+            why_bits.append("cold")
+
+    nrfi_prob = max(0.20, min(0.85, nrfi_prob))
+    expected_runs = round(float(home_runs_avg) + float(away_runs_avg), 2)
+
+    if nrfi_prob >= 0.55:
+        pick = "NRFI"
+        probability = round(nrfi_prob * 100, 1)
+    else:
+        pick = "YRFI"
+        probability = round((1 - nrfi_prob) * 100, 1)
+
+    why = (
+        f"Home P {int(float(home_solo)*100)}% NRFI · "
+        f"Away P {int(float(away_solo)*100)}% NRFI · "
+        f"~{expected_runs} R expected"
+    )
+    if why_bits:
+        why += " · " + ", ".join(why_bits)
+
+    return {
+        "pick": pick,
+        "probability": probability,
+        "expected_first_inning_runs": expected_runs,
+        "why": why,
+        "fair_odds": _prob_to_american(nrfi_prob if pick == "NRFI" else (1 - nrfi_prob)),
     }

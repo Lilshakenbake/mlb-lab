@@ -20,6 +20,7 @@ from src.predict import (
     build_pitcher_k_prop,
     build_spread_lean,
     compute_hr_threat,
+    compute_nrfi,
 )
 
 PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "16"))
@@ -45,6 +46,7 @@ _PLAYS_LOCK = threading.Lock()
 # purely by probability of 1+ HR (not by line edge), since HR lines are almost
 # always 0.5 and the standard edge logic biases toward UNDER.
 HR_THREATS_CACHE = {"ts": 0, "data": []}
+NRFI_CACHE = {"ts": 0, "data": []}
 SPECIALS_CACHE = {"ts": 0, "data": {"run_line": None, "sgp": None, "cross_parlay": None, "hr_pair": None}}
 HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "12"))
 
@@ -309,6 +311,15 @@ def build_game_boards(game):
             t["game_pk"] = game.get("gamePk")
             hr_threats.append(t)
 
+    nrfi = compute_nrfi(
+        game, home_pitcher_profile, away_pitcher_profile, weather, park_name=park_name,
+    )
+    if nrfi:
+        nrfi["matchup"] = matchup_label
+        nrfi["game_pk"] = game.get("gamePk")
+        nrfi["home_pitcher"] = home_pitcher_name
+        nrfi["away_pitcher"] = away_pitcher_name
+
     return {
         "top_hits": sorted(top_hits, key=lambda x: x["probability"], reverse=True),
         "top_total_bases": sorted(top_total_bases, key=lambda x: x["probability"], reverse=True),
@@ -320,6 +331,7 @@ def build_game_boards(game):
         "lineup_confirmed": lineup_confirmed,
         "projected_mode": projected_mode,
         "hr_threats": hr_threats,
+        "nrfi": nrfi,
     }
 
 
@@ -599,6 +611,7 @@ def _refresh_plays_blocking():
 
         all_plays = []
         all_hr_threats = []
+        all_nrfi = []
 
         def _publish_partial():
             """Push current results into the cache so the UI can render them
@@ -606,6 +619,7 @@ def _refresh_plays_blocking():
             entire slate scan to complete."""
             sorted_plays = sorted(all_plays, key=lambda p: p.get("probability", 0), reverse=True)
             sorted_hr = sorted(all_hr_threats, key=lambda x: x.get("probability", 0), reverse=True)
+            sorted_nrfi = sorted(all_nrfi, key=lambda x: x.get("probability", 0), reverse=True)
             # Diversify the displayed plays — cap how many can come from the
             # SAME game so a single hot matchup doesn't crowd out the rest of
             # the slate. Without this, the user only sees plays from 3-5 games.
@@ -625,17 +639,22 @@ def _refresh_plays_blocking():
                 PLAYS_CACHE["data"] = diversified
                 HR_THREATS_CACHE["ts"] = time.time()
                 HR_THREATS_CACHE["data"] = sorted_hr[:HR_THREATS_LIMIT]
+                NRFI_CACHE["ts"] = time.time()
+                NRFI_CACHE["data"] = sorted_nrfi
                 SPECIALS_CACHE["ts"] = time.time()
                 SPECIALS_CACHE["data"] = specials
 
         def _absorb_game(g):
-            """Run one game's board build and merge its plays + HR threats."""
+            """Run one game's board build and merge its plays + HR threats + NRFI."""
             game_pk = g.get("gamePk")
             try:
                 all_plays.extend(_build_plays_for_game(g))
                 cached = BOARD_CACHE.get(game_pk)
                 if cached and cached.get("data"):
                     all_hr_threats.extend(cached["data"].get("hr_threats", []) or [])
+                    nrfi_entry = cached["data"].get("nrfi")
+                    if nrfi_entry:
+                        all_nrfi.append(nrfi_entry)
             except Exception as e:
                 print(f"[plays-refresh] game {game_pk} failed: {e}")
             gc.collect()
@@ -656,6 +675,9 @@ def _refresh_plays_blocking():
                         cached = BOARD_CACHE.get(game_pk)
                         if cached and cached.get("data"):
                             all_hr_threats.extend(cached["data"].get("hr_threats", []) or [])
+                            nrfi_entry = cached["data"].get("nrfi")
+                            if nrfi_entry:
+                                all_nrfi.append(nrfi_entry)
                     except Exception as e:
                         print(f"[plays-refresh] game {game_pk} failed: {e}")
                     gc.collect()
@@ -717,6 +739,17 @@ def api_hr_threats():
 @login_required
 def api_plays_of_day():
     return jsonify(get_plays_of_day_snapshot())
+
+
+@app.route("/api/nrfi", methods=["GET"])
+@login_required
+def api_nrfi():
+    """No-Runs-First-Inning watch board for every game tonight."""
+    with _PLAYS_LOCK:
+        data = list(NRFI_CACHE["data"])
+        ts = NRFI_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+    return jsonify({"nrfi": data, "ts": ts, "computing": computing})
 
 
 @app.route("/api/specials", methods=["GET"])
