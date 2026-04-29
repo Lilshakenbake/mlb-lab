@@ -798,23 +798,37 @@ def build_spread_lean(game, home_team_score, away_team_score, home_pitcher_profi
     else:
         ml_probability = 51
 
-    if abs_margin >= 4.0:
-        run_line_probability = 64
-    elif abs_margin >= 3.0:
-        run_line_probability = 60
-    elif abs_margin >= 2.0:
-        run_line_probability = 56
-    elif abs_margin >= 1.25:
-        run_line_probability = 53
+    # Run-line direction logic — the OLD code always recommended the favorite
+    # at -1.5 (cover by 2+), which is the harder side. Sharp run-line betting
+    # takes the +1.5 on the underdog when the matchup is close, and only the
+    # -1.5 on the favorite when the projected margin is clearly 2+ runs.
+    favorite = game['home_team'] if margin > 0 else game['away_team']
+    underdog = game['away_team'] if margin > 0 else game['home_team']
+
+    if abs_margin >= 2.5:
+        # Clear favorite — recommend favorite -1.5
+        run_line_pick = f"{favorite} -1.5"
+        if abs_margin >= 4.0:
+            run_line_probability = 64
+        elif abs_margin >= 3.0:
+            run_line_probability = 60
+        else:
+            run_line_probability = 56
     else:
-        run_line_probability = 50
+        # Close game — recommend underdog +1.5 (much higher base rate; only
+        # loses when the dog loses by exactly 2+ runs).
+        run_line_pick = f"{underdog} +1.5"
+        if abs_margin <= 0.6:
+            run_line_probability = 64  # near pick-em → +1.5 is gold
+        elif abs_margin <= 1.25:
+            run_line_probability = 60
+        else:
+            run_line_probability = 56
 
     if margin > 0:
         ml_pick = f"{game['home_team']} ML"
-        run_line_pick = f"{game['home_team']} -1.5"
     else:
         ml_pick = f"{game['away_team']} ML"
-        run_line_pick = f"{game['away_team']} -1.5"
 
     confidence = "LOW"
     if ml_probability >= 66:

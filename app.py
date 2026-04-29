@@ -36,7 +36,8 @@ BOARD_CACHE_TTL_SECONDS = int(os.getenv("BOARD_CACHE_TTL", "1800"))  # 30 min de
 PLAYS_CACHE = {"ts": 0, "data": [], "computing": False}
 PLAYS_CACHE_TTL_SECONDS = int(os.getenv("PLAYS_CACHE_TTL", "600"))  # 10 min default
 PLAYS_GAME_CONCURRENCY = int(os.getenv("PLAYS_GAME_CONCURRENCY", "2"))
-PLAYS_LIMIT = int(os.getenv("PLAYS_LIMIT", "12"))
+PLAYS_LIMIT = int(os.getenv("PLAYS_LIMIT", "20"))
+PLAYS_PER_GAME_CAP = int(os.getenv("PLAYS_PER_GAME_CAP", "3"))
 BOARD_INNER_CONCURRENCY = int(os.getenv("BOARD_INNER_CONCURRENCY", "3"))
 _PLAYS_LOCK = threading.Lock()
 
@@ -44,7 +45,7 @@ _PLAYS_LOCK = threading.Lock()
 # purely by probability of 1+ HR (not by line edge), since HR lines are almost
 # always 0.5 and the standard edge logic biases toward UNDER.
 HR_THREATS_CACHE = {"ts": 0, "data": []}
-SPECIALS_CACHE = {"ts": 0, "data": {"run_line": None, "sgp": None, "hr_pair": None}}
+SPECIALS_CACHE = {"ts": 0, "data": {"run_line": None, "sgp": None, "cross_parlay": None, "hr_pair": None}}
 HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "12"))
 
 STAT_LABELS = {
@@ -443,11 +444,12 @@ def _parlay_payout_units(probs, leg_odds=-110, stake_units=1.0):
 
 
 def _build_specials(sorted_plays, sorted_hr):
-    """Compute the three daily specials from already-collected data:
+    """Compute the daily specials from already-collected data:
        1. Best Run Line of the Day
        2. Best 3-Leg Same-Game Parlay
-       3. Best HR Pair (2-leg)"""
-    specials = {"run_line": None, "sgp": None, "hr_pair": None}
+       3. Best 3-Leg Cross-Game Parlay (any players, any stat)
+       4. Best HR Pair (2-leg)"""
+    specials = {"run_line": None, "sgp": None, "cross_parlay": None, "hr_pair": None}
 
     # ── 1. Best Run Line ──────────────────────────────────────────────────
     run_lines = [p for p in sorted_plays if p.get("kind") == "runline"]
@@ -517,7 +519,52 @@ def _build_specials(sorted_plays, sorted_hr):
                 "payout_units": payout,  # profit on 1u stake at -110 each leg
             }
 
-    # ── 3. Best HR Pair ───────────────────────────────────────────────────
+    # ── 3. Best 3-Leg CROSS-Game Parlay ───────────────────────────────────
+    # Pick the 3 highest-probability props from THREE DIFFERENT games. No
+    # same-game correlation requirement — pure best-available across the
+    # whole slate. Keeps player diversity too.
+    cross_legs = []
+    cross_games_used = set()
+    cross_players_used = set()
+    for p in sorted_plays:
+        if p.get("kind") in ("moneyline", "runline"):
+            continue
+        if (p.get("probability") or 0) < 60:
+            continue
+        gpk = p.get("game_pk")
+        player = p.get("headline")
+        if gpk in cross_games_used:
+            continue  # different game requirement
+        if player in cross_players_used:
+            continue
+        cross_legs.append(p)
+        cross_games_used.add(gpk)
+        cross_players_used.add(player)
+        if len(cross_legs) == 3:
+            break
+
+    if len(cross_legs) == 3:
+        probs = [(p.get("probability") or 0) / 100.0 for p in cross_legs]
+        combined = probs[0] * probs[1] * probs[2]
+        payout, combined_pct = _parlay_payout_units(probs)
+        specials["cross_parlay"] = {
+            "legs": [
+                {
+                    "player": p.get("headline"),
+                    "stat": p.get("stat_label"),
+                    "pick": f'{p.get("pick")} {p.get("line")}',
+                    "matchup": p.get("matchup"),
+                    "probability": p.get("probability"),
+                    "game_pk": p.get("game_pk"),
+                }
+                for p in cross_legs
+            ],
+            "combined_probability": combined_pct,
+            "fair_odds": _prob_to_american(combined),
+            "payout_units": payout,
+        }
+
+    # ── 4. Best HR Pair ───────────────────────────────────────────────────
     if len(sorted_hr) >= 2:
         # Top two HR threats — could be same or different games.
         h1, h2 = sorted_hr[0], sorted_hr[1]
@@ -559,10 +606,23 @@ def _refresh_plays_blocking():
             entire slate scan to complete."""
             sorted_plays = sorted(all_plays, key=lambda p: p.get("probability", 0), reverse=True)
             sorted_hr = sorted(all_hr_threats, key=lambda x: x.get("probability", 0), reverse=True)
+            # Diversify the displayed plays — cap how many can come from the
+            # SAME game so a single hot matchup doesn't crowd out the rest of
+            # the slate. Without this, the user only sees plays from 3-5 games.
+            diversified = []
+            game_counts = {}
+            for p in sorted_plays:
+                gpk = p.get("game_pk")
+                if gpk is not None and game_counts.get(gpk, 0) >= PLAYS_PER_GAME_CAP:
+                    continue
+                diversified.append(p)
+                game_counts[gpk] = game_counts.get(gpk, 0) + 1
+                if len(diversified) >= PLAYS_LIMIT:
+                    break
             specials = _build_specials(sorted_plays, sorted_hr)
             with _PLAYS_LOCK:
                 PLAYS_CACHE["ts"] = time.time()
-                PLAYS_CACHE["data"] = sorted_plays[:PLAYS_LIMIT]
+                PLAYS_CACHE["data"] = diversified
                 HR_THREATS_CACHE["ts"] = time.time()
                 HR_THREATS_CACHE["data"] = sorted_hr[:HR_THREATS_LIMIT]
                 SPECIALS_CACHE["ts"] = time.time()

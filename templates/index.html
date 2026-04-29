@@ -160,7 +160,7 @@
     <hr>
 
     <h2>⭐ Daily Specials</h2>
-    <p class="sub">Best Run Line · 3-Leg Same Game Parlay · Best HR Pair</p>
+    <p class="sub">Best Run Line · 3-Leg SGP · 3-Leg Cross-Game Parlay · Best HR Pair</p>
 
     <div id="specials" class="games-grid">
         <div class="card empty" id="specials-loading">Loading specials…</div>
@@ -414,6 +414,27 @@
             </div>`;
     };
 
+    const crossParlayCard = (s) => {
+        if (!s) return "";
+        const legs = (s.legs || []).map(l => {
+            const link = l.game_pk ? `/game/${l.game_pk}` : "#";
+            return `<div class="detail" style="font-size:12px;">
+                • <a href="${link}" style="color:inherit;">${escape(l.player)}</a> — ${escape(l.stat)} ${escape(l.pick)}
+                <span style="color:#94a3b8;">(${escape(l.matchup || "")} · ${escape(l.probability)}%)</span>
+              </div>`;
+        }).join("");
+        return `
+            <div class="card play-card">
+              <div>
+                <div class="matchup" style="color:#34d399;">🌐 3-Leg Cross-Game Parlay</div>
+                <div class="detail" style="color:#94a3b8; font-size:12px;">3 different games · best available</div>
+                ${legs}
+                <div class="detail"><strong>Fair odds:</strong> ${escape(s.fair_odds)} · <strong>Payout:</strong> +${escape(s.payout_units)}u on 1u</div>
+              </div>
+              <div class="prob-big" style="color:#34d399;">${escape(s.combined_probability)}%</div>
+            </div>`;
+    };
+
     const hrPairCard = (h) => {
         if (!h) return "";
         const a = h.leg_a, b = h.leg_b;
@@ -433,6 +454,7 @@
         const cards = [];
         if (specials && specials.run_line) cards.push(runLineCard(specials.run_line));
         if (specials && specials.sgp) cards.push(sgpCard(specials.sgp));
+        if (specials && specials.cross_parlay) cards.push(crossParlayCard(specials.cross_parlay));
         if (specials && specials.hr_pair) cards.push(hrPairCard(specials.hr_pair));
         if (cards.length === 0) {
             grid.innerHTML = '<div class="card empty">No specials yet — still computing.</div>';
@@ -446,7 +468,7 @@
             .then(r => r.ok ? r.json() : Promise.reject(r.status))
             .then(data => {
                 render(data.specials || {});
-                const hasAny = data.specials && (data.specials.run_line || data.specials.sgp || data.specials.hr_pair);
+                const hasAny = data.specials && (data.specials.run_line || data.specials.sgp || data.specials.cross_parlay || data.specials.hr_pair);
                 if (data.computing && !hasAny) {
                     grid.innerHTML = '<div class="card empty">Computing daily specials…</div>';
                     setTimeout(loadSpecials, 8000);
