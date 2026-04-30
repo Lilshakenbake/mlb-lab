@@ -23,6 +23,7 @@ from src.predict import (
     compute_nrfi,
     build_hrr_combo,
 )
+from src import ai_review
 
 PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "16"))
 PROFILE_FETCH_WORKERS = int(os.getenv("PROFILE_FETCH_WORKERS", "2"))
@@ -706,6 +707,41 @@ def _build_specials(sorted_plays, sorted_hr):
     return specials
 
 
+def _run_ai_review_pass():
+    """Batch-review the top locks, top HRR combos, and top HR threats with
+    GPT, then atomically swap the cache lists with reviewed copies.
+
+    Single API call per refresh keeps cost low. We deep-copy each pick before
+    attaching the AI review so that API handlers (which copy the list under
+    the lock and then JSON-encode outside the lock) never observe a dict
+    being mutated mid-serialization.
+    """
+    if not ai_review.is_enabled():
+        return
+    import copy
+    with _PLAYS_LOCK:
+        locks_snapshot = [copy.deepcopy(p) for p in LOCKS_CACHE["data"]]
+        hrr_snapshot = [copy.deepcopy(c) for c in HRR_COMBO_CACHE["data"]]
+        hr_snapshot = [copy.deepcopy(h) for h in HR_THREATS_CACHE["data"]]
+    bundle = locks_snapshot + hrr_snapshot[:6] + hr_snapshot[:6]
+    if not bundle:
+        return
+    reviews = ai_review.review_picks(bundle, kind="mlb-locks-hrr-hr")
+    if not reviews:
+        return
+    ai_review.attach_reviews(locks_snapshot, reviews)
+    ai_review.attach_reviews(hrr_snapshot, reviews)
+    ai_review.attach_reviews(hr_snapshot, reviews)
+    # Atomic publish — replace the list refs entirely so a reader holding
+    # the old list never sees a dict get an `ai_review` key bolted on after
+    # the fact.
+    with _PLAYS_LOCK:
+        LOCKS_CACHE["data"] = locks_snapshot
+        HRR_COMBO_CACHE["data"] = hrr_snapshot
+        HR_THREATS_CACHE["data"] = hr_snapshot
+    print(f"[ai-review] attached {len(reviews)} verdicts")
+
+
 def _refresh_plays_blocking():
     import gc
     try:
@@ -728,19 +764,65 @@ def _refresh_plays_blocking():
             sorted_hr = sorted(all_hr_threats, key=lambda x: x.get("probability", 0), reverse=True)
             sorted_nrfi = sorted(all_nrfi, key=lambda x: x.get("probability", 0), reverse=True)
             sorted_hrr = sorted(all_hrr, key=lambda x: x.get("probability", 0), reverse=True)
-            # Diversify the displayed plays — cap how many can come from the
-            # SAME game so a single hot matchup doesn't crowd out the rest of
-            # the slate. Without this, the user only sees plays from 3-5 games.
+            # Diversify the displayed plays. Two-pass strategy guarantees
+            # that EVERY game on the slate gets at least one entry on the
+            # board, then fills the remaining slots by raw probability with
+            # a per-game cap. Previously only top-prob games made the cut
+            # and 4-5 games could be entirely missing from the dashboard.
             diversified = []
-            game_counts = {}
+            seen_ids: set[int] = set()
+            game_counts: dict = {}
+            # Pass 1: top play from each unique game (sorted by prob desc).
             for p in sorted_plays:
+                gpk = p.get("game_pk")
+                if gpk is None or gpk in game_counts:
+                    continue
+                diversified.append(p)
+                seen_ids.add(id(p))
+                game_counts[gpk] = 1
+            # Total slots scale with slate size so a 15-game card isn't
+            # crammed into a fixed 20-row list.
+            target = max(PLAYS_LIMIT, len(game_counts) * 2)
+            # Pass 2: fill with the next-best plays, respecting per-game cap.
+            for p in sorted_plays:
+                if id(p) in seen_ids:
+                    continue
                 gpk = p.get("game_pk")
                 if gpk is not None and game_counts.get(gpk, 0) >= PLAYS_PER_GAME_CAP:
                     continue
                 diversified.append(p)
+                seen_ids.add(id(p))
                 game_counts[gpk] = game_counts.get(gpk, 0) + 1
-                if len(diversified) >= PLAYS_LIMIT:
+                if len(diversified) >= target:
                     break
+
+            # Same first-pass-per-game treatment for HRR combos so the
+            # 1+ H/R/RBI board doesn't get monopolized by 1-2 games. Also
+            # apply the per-game cap on the fill pass so a single hot lineup
+            # can't take 6+ of the 12 slots.
+            hrr_diversified = []
+            hrr_seen_ids: set[int] = set()
+            hrr_game_counts: dict = {}
+            for c in sorted_hrr:
+                gpk = c.get("game_pk")
+                if gpk is None or gpk in hrr_game_counts:
+                    continue
+                hrr_diversified.append(c)
+                hrr_seen_ids.add(id(c))
+                hrr_game_counts[gpk] = 1
+            for c in sorted_hrr:
+                if id(c) in hrr_seen_ids:
+                    continue
+                gpk = c.get("game_pk")
+                if gpk is not None and hrr_game_counts.get(gpk, 0) >= PLAYS_PER_GAME_CAP:
+                    continue
+                hrr_diversified.append(c)
+                hrr_seen_ids.add(id(c))
+                hrr_game_counts[gpk] = hrr_game_counts.get(gpk, 0) + 1
+                if len(hrr_diversified) >= HRR_COMBO_LIMIT:
+                    break
+            hrr_diversified = hrr_diversified[:HRR_COMBO_LIMIT]
+
             specials = _build_specials(sorted_plays, sorted_hr)
             with _PLAYS_LOCK:
                 PLAYS_CACHE["ts"] = time.time()
@@ -750,7 +832,7 @@ def _refresh_plays_blocking():
                 NRFI_CACHE["ts"] = time.time()
                 NRFI_CACHE["data"] = sorted_nrfi
                 HRR_COMBO_CACHE["ts"] = time.time()
-                HRR_COMBO_CACHE["data"] = sorted_hrr[:HRR_COMBO_LIMIT]
+                HRR_COMBO_CACHE["data"] = hrr_diversified
                 # Locks = top plays before per-game diversification, deduped
                 # by (player, stat) so doubleheaders don't repeat in the hero.
                 seen_locks = set()
@@ -810,6 +892,13 @@ def _refresh_plays_blocking():
                     _publish_partial()
 
         print(f"[plays-refresh] done: {len(all_plays)} plays, {len(all_hr_threats)} HR threats")
+        # OpenAI second-opinion pass over the published top picks. Runs once
+        # per refresh cycle and uses gpt-4o-mini, so cost stays small. If the
+        # API call fails or no key is set, this is a no-op.
+        try:
+            _run_ai_review_pass()
+        except Exception as e:
+            print(f"[ai-review] pass failed: {e}")
     except Exception as e:
         print(f"[plays-refresh] unexpected error: {e}")
     finally:

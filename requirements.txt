@@ -6,3 +6,4 @@ pandas
 numpy
 joblib
 scikit-learn
+openai

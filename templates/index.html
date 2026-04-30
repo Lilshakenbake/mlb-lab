@@ -316,6 +316,27 @@
 </div>
 
 <script>
+// Shared helper: render the OpenAI second-opinion pill for a pick.
+// `r` is the ai_review object: { verdict, confidence, note }.
+window.__aiPill = function (r) {
+    if (!r || !r.verdict) return "";
+    const esc = (s) => String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const colors = {
+        AGREE: { bg: "#064e3b", fg: "#6ee7b7", label: "AI ✓" },
+        LEAN:  { bg: "#3f3f0d", fg: "#fde68a", label: "AI ~" },
+        FADE:  { bg: "#4c0519", fg: "#fda4af", label: "AI ✗" },
+    };
+    const c = colors[r.verdict] || colors.LEAN;
+    const conf = r.confidence ? ` ${esc(r.confidence)}` : "";
+    const note = r.note
+        ? `<div class="detail" style="font-size:11px; color:#cbd5e1; margin-top:4px;">
+              <span style="color:${c.fg};">${c.label}${conf}:</span> ${esc(r.note)}
+           </div>`
+        : `<span class="play-pill" style="background:${c.bg}; color:${c.fg};">${c.label}${conf}</span>`;
+    return note;
+};
+
 (function () {
     const grid = document.getElementById("plays-of-day");
     if (!grid) return;
@@ -718,6 +739,7 @@
         const whyBit = c.matchup_note
             ? `<div class="detail" style="font-size:11px; color:#fcd34d;">${escape(c.matchup_note)}</div>`
             : "";
+        const aiBit = window.__aiPill ? window.__aiPill(c.ai_review) : "";
         return `
             <div class="card play-card" style="border-left:4px solid #38bdf8;">
               <a href="${link}" style="text-decoration:none; color:inherit;">
@@ -733,6 +755,7 @@
                   </div>
                   ${projBit}
                   ${whyBit}
+                  ${aiBit}
                 </div>
                 <div class="prob-big ${probTier(c.probability)}">${escape(c.probability)}%</div>
               </a>
@@ -825,6 +848,7 @@
     const lockCard = (p, i) => {
         const link = p.game_pk ? `/game/${p.game_pk}` : "#";
         const ranks = ["LOCK #1", "LOCK #2", "LOCK #3"];
+        const aiBit = window.__aiPill ? window.__aiPill(p.ai_review) : "";
         return `
           <a class="hero-card" href="${link}">
             <div class="lock-rank">${ranks[i] || "LOCK"}</div>
@@ -832,6 +856,7 @@
             <div class="lock-stat">${escape(p.stat_label)} ${escape(p.pick || "")} ${p.line != null ? escape(p.line) : ""}</div>
             <div class="lock-stat" style="color:#a7f3d0;">${escape(p.matchup || "")}</div>
             <div class="lock-prob">${escape(p.probability)}%</div>
+            ${aiBit}
           </a>`;
     };
 
