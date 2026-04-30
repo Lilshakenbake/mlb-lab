@@ -1000,7 +1000,7 @@ def compute_nrfi(game, home_pitcher_profile, away_pitcher_profile, weather, park
     }
 
 
-def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_idx,
+def build_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_idx,
                       weather, park_name=None, opp_team=None, line=0.5):
     """1+ in any of (hits, runs, RBIs) — high-floor hitter prop.
 

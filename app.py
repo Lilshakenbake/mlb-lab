@@ -21,7 +21,7 @@ from src.predict import (
     build_spread_lean,
     compute_hr_threat,
     compute_nrfi,
-    compute_hrr_combo,
+    build_hrr_combo,
 )
 
 PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "16"))
@@ -337,7 +337,7 @@ def build_game_boards(game):
     # runs + RBIs >= 1 probability (the "any of three" high-floor prop).
     hrr_combo = []
     for idx, (_, name, profile) in enumerate(away_hitters):
-        c = compute_hrr_combo(
+        c = build_hrr_combo(
             name, profile, home_pitcher_profile, idx, weather,
             park_name=park_name, opp_team=game.get("home_team"),
         )
@@ -348,7 +348,7 @@ def build_game_boards(game):
             c["lineup_spot"] = idx + 1
             hrr_combo.append(c)
     for idx, (_, name, profile) in enumerate(home_hitters):
-        c = compute_hrr_combo(
+        c = build_hrr_combo(
             name, profile, away_pitcher_profile, idx, weather,
             park_name=park_name, opp_team=game.get("away_team"),
         )
