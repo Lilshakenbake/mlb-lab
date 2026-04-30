@@ -333,8 +333,8 @@ def build_game_boards(game):
         nrfi["home_pitcher"] = home_pitcher_name
         nrfi["away_pitcher"] = away_pitcher_name
 
-    # ── H+R+RBI combo prop board: one row per hitter with combined hits +
-    # runs + RBIs probability. Books offer this as a single-leg prop.
+    # ── 1+ H/R/RBI prop board: one row per hitter with combined hits +
+    # runs + RBIs >= 1 probability (the "any of three" high-floor prop).
     hrr_combo = []
     for idx, (_, name, profile) in enumerate(away_hitters):
         c = compute_hrr_combo(
@@ -420,14 +420,16 @@ def _build_plays_for_game(game):
                 "game_pk": game.get("gamePk"),
             })
 
-    # H+R+RBI combo prop — surfaces as a regular play card too.
+    # 1+ H/R/RBI prop — high-floor "any of three" prop. Surfaces as a
+    # regular play card so it flows through the same diversification +
+    # tracking + grading pipeline as other hitter plays.
     for prop in boards.get("hrr_combo", []):
         if prop.get("pick") == "PASS":
             continue
         out.append({
             "kind": "hitter_combo",
             "headline": prop.get("player", ""),
-            "stat_label": "H+R+RBI",
+            "stat_label": "1+ H/R/RBI",
             "pick": prop.get("pick"),
             "line": prop.get("line"),
             "projection": prop.get("projection"),
@@ -648,6 +650,11 @@ def _build_specials(sorted_plays, sorted_hr):
     tb_players_used = set()
     for p in sorted_plays:
         if p.get("stat_label") != "Total Bases":
+            continue
+        # Bases parlay is a "more bases than the line" play — only OVER
+        # legs make sense (you'd never parlay UNDER total bases since 0
+        # is the floor and the upside is uncapped on the OVER side).
+        if p.get("pick") != "OVER":
             continue
         if (p.get("probability") or 0) < 60:
             continue

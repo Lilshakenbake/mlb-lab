@@ -28,8 +28,12 @@ BAT_FIELD_MAP = {
     "RBIs": "rbi",
 }
 
-# Combo prop: sum of multiple boxscore fields (e.g. H+R+RBI).
+# Combo prop: sum of multiple boxscore fields. The "1+ H/R/RBI" prop
+# resolves to OVER 0.5 if the sum >= 1 (any of the three contributed).
+# Legacy "H+R+RBI" label is kept so previously-tracked plays continue
+# to grade after the relabel.
 COMBO_FIELD_MAP = {
+    "1+ H/R/RBI": ("hits", "runs", "rbi"),
     "H+R+RBI": ("hits", "runs", "rbi"),
 }
 

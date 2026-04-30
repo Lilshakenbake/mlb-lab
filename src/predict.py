@@ -1001,17 +1001,24 @@ def compute_nrfi(game, home_pitcher_profile, away_pitcher_profile, weather, park
 
 
 def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_idx,
-                      weather, park_name=None, opp_team=None, line=1.5):
-    """Combined Hits + Runs + RBIs prop.
+                      weather, park_name=None, opp_team=None, line=0.5):
+    """Combined "1+ Hit / Run / RBI" prop.
 
-    Books offer this as a single prop where you bet OVER/UNDER 1.5 (or 2.5)
-    on the SUM of a hitter's hits, runs scored, and RBIs in one game. It
-    typically hits 75-85% on the right matchups because the player only
-    needs to contribute in any one of three ways.
+    The play: a hitter records AT LEAST ONE of (a hit, a run scored, an RBI)
+    in the game. This is the highest-floor hitter prop available — a player
+    only needs to contribute in any one of three ways — and books typically
+    quote it 75-85% to hit on the right matchups.
 
-    We re-use the same context machinery as build_hitter_prop (park, platoon,
-    bullpen, weather, hot streak) and approximate runs scored from hits with
-    a 0.45 multiplier (league average runs/hit ratio for non-pitcher batters).
+    Math: probability via inclusion-exclusion on per-stat Poisson rates,
+        P(any 1+) = 1 - P(H=0) * P(R=0) * P(RBI=0)
+    then a small downward correlation discount because H/R/RBI cluster
+    (a 0-hit game is more likely to be 0-run AND 0-RBI than independence
+    would suggest, so the true 'all zero' probability is higher than the
+    product, meaning the true union probability is slightly lower).
+
+    We re-use the same context machinery as build_hitter_prop (park,
+    platoon, bullpen, weather, hot streak) and approximate runs scored
+    from hits with a 0.45 multiplier (league average runs/hit ratio).
     """
     if not hitter_profile:
         return None
@@ -1081,56 +1088,33 @@ def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_i
     lam_rbi = max(0.01, rbi_avg * context + weather_boost * 0.25)
     base_sum = lam_h + lam_r + lam_rbi
 
-    # Inclusion-exclusion on the SUM of the three components, treating each
-    # as an independent Poisson. We compute P(H = a) * P(R = b) * P(RBI = c)
-    # for all small (a,b,c) and tally probabilities of each total. This is
-    # the explicit per-stat formulation the bet semantics call for, rather
-    # than rolling everything into a single Poisson(λ_total).
+    # Probability of "1+ in any of H/R/RBI" by inclusion-exclusion on the
+    # per-stat Poissons:
+    #   P(union) = 1 - P(H=0) * P(R=0) * P(RBI=0)
+    # which under independence equals 1 - exp(-(λ_H + λ_R + λ_RBI)).
     import math
-    def _pois(k, lam):
-        return math.exp(-lam) * (lam ** k) / math.factorial(k)
+    p_h0   = math.exp(-lam_h)
+    p_r0   = math.exp(-lam_r)
+    p_rbi0 = math.exp(-lam_rbi)
+    p_all_zero_independent = p_h0 * p_r0 * p_rbi0
+    union_prob_independent = 1.0 - p_all_zero_independent
 
-    # Threshold convention used by books: 1.5 → need 2+, 2.5 → need 3+.
-    if line <= 0.5:
-        threshold = 1
-    elif line <= 1.5:
-        threshold = 2
-    elif line <= 2.5:
-        threshold = 3
-    else:
-        threshold = int(line) + 1
+    # Correlation discount: H/R/RBI cluster — a 0-hit game is more likely
+    # to also be 0-run AND 0-RBI than independence implies. So the true
+    # P(all zero) is higher than the product, and the true union prob is
+    # slightly lower. Inflate the all-zero mass by ~7% (empirically
+    # calibrated to the 0.3-0.5 intra-game ρ typical for these stats),
+    # capped so the union prob stays in [0, 1].
+    p_all_zero = min(1.0, p_all_zero_independent * 1.07)
+    union_prob = max(0.0, min(1.0, 1.0 - p_all_zero))
 
-    # Sum P(H+R+RBI < threshold) by enumerating low-count buckets explicitly.
-    # For threshold ≤ 4 this is at most ~125 cells — cheap and exact.
-    p_under = 0.0
-    max_k = max(5, threshold + 2)
-    ph = [_pois(k, lam_h) for k in range(max_k)]
-    pr = [_pois(k, lam_r) for k in range(max_k)]
-    pi = [_pois(k, lam_rbi) for k in range(max_k)]
-    for h in range(threshold):
-        for r in range(threshold - h):
-            for rb in range(threshold - h - r):
-                p_under += ph[h] * pr[r] * pi[rb]
-    over_prob_independent = max(0.0, min(1.0, 1.0 - p_under))
-
-    # Correlation discount: H/R/RBI are positively correlated in the same
-    # game (a hitter who reaches base is more likely to score AND drive in
-    # runs). The independent-Poisson model under-counts the both-cluster
-    # outcomes — too much mass in the middle, too little at the extremes.
-    # This means the true P(sum=0) is HIGHER than independent assumes, so
-    # the true OVER probability is slightly LOWER. Apply a 7% multiplicative
-    # haircut to over-prob (empirically calibrated to the 0.3-0.5 ρ range
-    # typical for these stats on a single game).
-    over_prob = over_prob_independent * 0.93
-
-    edge = round(base_sum - line, 2)
-    if abs(edge) < 0.20:
-        pick = "PASS"
-    else:
-        pick = "OVER" if edge > 0 else "UNDER"
-    probability = over_prob * 100 if pick == "OVER" else (1 - over_prob) * 100
-    # Same realism cap as other props.
-    probability = max(min(round(probability, 1), 78.0), 22.0)
+    # This prop is one-sided — the bet is "yes, the player records at
+    # least 1 of H/R/RBI" (line 0.5). No UNDER side. Skip plays that
+    # don't clear a useful confidence floor; the board only shows the
+    # high-floor picks this prop is designed for.
+    pick = "OVER" if union_prob >= 0.55 else "PASS"
+    edge = round(union_prob - 0.50, 2)  # edge over a 50/50 baseline
+    probability = max(min(round(union_prob * 100, 1), 78.0), 22.0)
 
     why_bits = []
     if abs(park_f - 1.0) >= 0.04:
@@ -1153,5 +1137,5 @@ def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_i
         "probability": probability,
         "matchup_note": ", ".join(why_bits) if why_bits else "",
         "model_used": False,
-        "fair_odds": _prob_to_american(over_prob if pick == "OVER" else 1 - over_prob),
+        "fair_odds": _prob_to_american(union_prob),
     }

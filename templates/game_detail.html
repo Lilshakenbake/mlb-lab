@@ -321,20 +321,19 @@
 
             <hr>
 
-            <h2>Best H+R+RBI Combo</h2>
-            <p class="section-note">Hits + Runs + RBIs combined — single high-floor prop offered by most books</p>
+            <h2>Best 1+ H/R/RBI Plays</h2>
+            <p class="section-note">Player records at least one hit, run, or RBI — highest-floor hitter prop</p>
             {% if hrr_combo %}
                 <div class="games-grid">
                     {% for prop in hrr_combo %}
                         <div class="card">
                             <div class="matchup">{{ prop.player }}{% if prop.model_used %}<span class="badge badge-model">MODEL</span>{% else %}<span class="badge badge-heuristic">HEURISTIC</span>{% endif %}</div>
-                            <div class="detail"><strong>Projection:</strong> {{ prop.projection }}</div>
-                            <div class="detail"><strong>Line:</strong> {{ prop.line }}</div>
-                            <div class="detail"><strong>Edge:</strong> {{ prop.edge }}</div>
-                            <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
+                            <div class="detail"><strong>Expected H+R+RBI:</strong> {{ prop.projection }}</div>
+                            <div class="detail"><strong>Pick:</strong> 1+ H/R/RBI (YES)</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
+                            {% if prop.matchup_note %}<div class="detail" style="color:#fcd34d; font-size:12px;">{{ prop.matchup_note }}</div>{% endif %}
                             <div class="status">vs {{ prop.pitcher }}{% if prop.lineup_spot %} · #{{ prop.lineup_spot }}{% endif %}</div>
-                            {% if prop.pick != "PASS" %}{{ track_button("hitter_combo", prop.player, "H+R+RBI", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
+                            {% if prop.pick != "PASS" %}{{ track_button("hitter_combo", prop.player, "1+ H/R/RBI", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
