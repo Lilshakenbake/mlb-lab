@@ -812,9 +812,7 @@
     load();
 })();
 
-// ── Top 3 Locks hero ─────────────────────────────────────────────────
-// Pulls from the same /api/plays-of-day feed and shows the three highest-
-// probability single plays in a hero row at the top of the page.
+// ── Top 3 Locks hero — top deduped plays before per-game cap.
 (function () {
     const row = document.getElementById("locks-row");
     if (!row) return;

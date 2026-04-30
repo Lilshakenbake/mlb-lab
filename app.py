@@ -420,9 +420,7 @@ def _build_plays_for_game(game):
                 "game_pk": game.get("gamePk"),
             })
 
-    # 1+ H/R/RBI prop — high-floor "any of three" prop. Surfaces as a
-    # regular play card so it flows through the same diversification +
-    # tracking + grading pipeline as other hitter plays.
+    # 1+ H/R/RBI prop — flows through the same play pipeline as other hitter plays.
     for prop in boards.get("hrr_combo", []):
         if prop.get("pick") == "PASS":
             continue
@@ -642,19 +640,14 @@ def _build_specials(sorted_plays, sorted_hr):
             "payout_units": payout,
         }
 
-    # ── 4. Best Bases Parlay (3-leg, total-bases only) ───────────────────
-    # Total bases is the highest-floor stat — a single counts. Build a
-    # cross-game 3-leg parlay using ONLY TB plays for a more reliable winner.
+    # ── 4. Best Bases Parlay (3 legs, OVER total-bases only) ────────────
     tb_legs = []
     tb_games_used = set()
     tb_players_used = set()
     for p in sorted_plays:
         if p.get("stat_label") != "Total Bases":
             continue
-        # Bases parlay is a "more bases than the line" play — only OVER
-        # legs make sense (you'd never parlay UNDER total bases since 0
-        # is the floor and the upside is uncapped on the OVER side).
-        if p.get("pick") != "OVER":
+        if p.get("pick") != "OVER":  # OVER-only — UNDER TB defeats the high-floor intent
             continue
         if (p.get("probability") or 0) < 60:
             continue
@@ -758,10 +751,8 @@ def _refresh_plays_blocking():
                 NRFI_CACHE["data"] = sorted_nrfi
                 HRR_COMBO_CACHE["ts"] = time.time()
                 HRR_COMBO_CACHE["data"] = sorted_hrr[:HRR_COMBO_LIMIT]
-                # Locks = top single plays before per-game diversification, so
-                # the hero strip surfaces the truly highest-prob plays even
-                # when one game has multiple top picks. Dedupe by player so
-                # doubleheaders don't show the same name twice in the hero.
+                # Locks = top plays before per-game diversification, deduped
+                # by (player, stat) so doubleheaders don't repeat in the hero.
                 seen_locks = set()
                 deduped_locks = []
                 for p in sorted_plays:

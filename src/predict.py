@@ -1002,23 +1002,12 @@ def compute_nrfi(game, home_pitcher_profile, away_pitcher_profile, weather, park
 
 def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_idx,
                       weather, park_name=None, opp_team=None, line=0.5):
-    """Combined "1+ Hit / Run / RBI" prop.
+    """1+ in any of (hits, runs, RBIs) — high-floor hitter prop.
 
-    The play: a hitter records AT LEAST ONE of (a hit, a run scored, an RBI)
-    in the game. This is the highest-floor hitter prop available — a player
-    only needs to contribute in any one of three ways — and books typically
-    quote it 75-85% to hit on the right matchups.
-
-    Math: probability via inclusion-exclusion on per-stat Poisson rates,
-        P(any 1+) = 1 - P(H=0) * P(R=0) * P(RBI=0)
-    then a small downward correlation discount because H/R/RBI cluster
-    (a 0-hit game is more likely to be 0-run AND 0-RBI than independence
-    would suggest, so the true 'all zero' probability is higher than the
-    product, meaning the true union probability is slightly lower).
-
-    We re-use the same context machinery as build_hitter_prop (park,
-    platoon, bullpen, weather, hot streak) and approximate runs scored
-    from hits with a 0.45 multiplier (league average runs/hit ratio).
+    P(union) = 1 - P(H=0)*P(R=0)*P(RBI=0) over per-stat Poissons, with
+    a small downward correlation discount (H/R/RBI cluster on a single
+    game). Runs use the RBI rate as proxy. Re-uses the build_hitter_prop
+    context factors (park, platoon, hot streak, bullpen, weather).
     """
     if not hitter_profile:
         return None
@@ -1042,13 +1031,11 @@ def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_i
         lineup_pos_factor = 0.92
     else:
         lineup_pos_factor = 0.85
-    # Runs-scored proxy: about 45% of hits convert to a run scored at the
-    # league level (R/H ≈ 0.45 for non-pitcher batters), with a small
-    # lineup-slot bump for top-of-order hitters who get driven in more.
-    # We derive runs from hits (rather than RBIs) because hits are the
-    # actual baserunner event upstream of scoring; RBIs are downstream
-    # and would double-count the same run-creation event.
-    runs_proj = hits_avg * 0.45 * lineup_pos_factor
+    # Runs proxy: per task spec, use RBI as the runs proxy. League-wide
+    # R/RBI ≈ 1.0, so a hitter's per-game RBI rate is a reasonable mean
+    # for runs scored, with a lineup-slot adjustment (top of order scores
+    # more relative to driving in; bottom of order is the inverse).
+    runs_proj = max(0.0, rbi_avg) * lineup_pos_factor
 
     # Combine the same context factors hits/RBI props would each get (use
     # the hits-stat factor as a representative offensive-context multiplier).
@@ -1087,41 +1074,24 @@ def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_i
 
     context = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * pen_f)
 
-    # Per-stat Poisson rates (independent baseline). Apply context to each.
-    # Weather boost is split proportionally across the three components.
+    # Per-stat Poisson rates; weather boost split across the three components.
     lam_h   = max(0.01, hits_avg * context + weather_boost * 0.55)
     lam_r   = max(0.01, runs_proj * context + weather_boost * 0.20)
     lam_rbi = max(0.01, rbi_avg * context + weather_boost * 0.25)
     base_sum = lam_h + lam_r + lam_rbi
 
-    # Probability of "1+ in any of H/R/RBI" by inclusion-exclusion on the
-    # per-stat Poissons:
-    #   P(union) = 1 - P(H=0) * P(R=0) * P(RBI=0)
-    # which under independence equals 1 - exp(-(λ_H + λ_R + λ_RBI)).
+    # Inclusion-exclusion on the union of "≥1 in each stat".
     import math
-    p_h0   = math.exp(-lam_h)
-    p_r0   = math.exp(-lam_r)
-    p_rbi0 = math.exp(-lam_rbi)
-    p_all_zero_independent = p_h0 * p_r0 * p_rbi0
-    union_prob_independent = 1.0 - p_all_zero_independent
-
-    # Correlation discount: H/R/RBI cluster — a 0-hit game is more likely
-    # to also be 0-run AND 0-RBI than independence implies. So the true
-    # P(all zero) is higher than the product, and the true union prob is
-    # slightly lower. Inflate the all-zero mass by ~7% (empirically
-    # calibrated to the 0.3-0.5 intra-game ρ typical for these stats),
-    # capped so the union prob stays in [0, 1].
+    p_all_zero_independent = math.exp(-lam_h) * math.exp(-lam_r) * math.exp(-lam_rbi)
+    # Positive intra-game correlation inflates the all-zero mass by ~7%,
+    # which lowers the union prob slightly vs. the independent baseline.
     p_all_zero = min(1.0, p_all_zero_independent * 1.07)
     union_prob = max(0.0, min(1.0, 1.0 - p_all_zero))
 
-    # This prop is one-sided — the bet is "yes, the player records at
-    # least 1 of H/R/RBI" (line 0.5). No UNDER side. Skip plays that
-    # don't clear a useful confidence floor; the board only shows the
-    # high-floor picks this prop is designed for. Cap is applied here
-    # and re-used for fair_odds so the displayed probability and the
-    # implied odds stay consistent.
+    # Single-sided prop (line 0.5, pick OVER). Cap is shared with
+    # fair_odds so the displayed probability and implied odds match.
     pick = "OVER" if union_prob >= 0.55 else "PASS"
-    edge = round(union_prob - 0.50, 2)  # edge over a 50/50 baseline
+    edge = round(union_prob - 0.50, 2)
     capped_prob = max(0.22, min(0.78, union_prob))
     probability = round(capped_prob * 100, 1)
 
