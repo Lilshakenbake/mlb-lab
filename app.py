@@ -58,6 +58,10 @@ SPECIALS_CACHE = {"ts": 0, "data": {
 HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "12"))
 HRR_COMBO_CACHE = {"ts": 0, "data": []}
 HRR_COMBO_LIMIT = int(os.getenv("HRR_COMBO_LIMIT", "12"))
+# Locks: top N highest-probability single plays across the WHOLE slate,
+# uncapped by per-game diversification. Used by the hero strip.
+LOCKS_CACHE = {"ts": 0, "data": []}
+LOCKS_LIMIT = int(os.getenv("LOCKS_LIMIT", "3"))
 
 STAT_LABELS = {
     "hits": "Hits",
@@ -747,6 +751,22 @@ def _refresh_plays_blocking():
                 NRFI_CACHE["data"] = sorted_nrfi
                 HRR_COMBO_CACHE["ts"] = time.time()
                 HRR_COMBO_CACHE["data"] = sorted_hrr[:HRR_COMBO_LIMIT]
+                # Locks = top single plays before per-game diversification, so
+                # the hero strip surfaces the truly highest-prob plays even
+                # when one game has multiple top picks. Dedupe by player so
+                # doubleheaders don't show the same name twice in the hero.
+                seen_locks = set()
+                deduped_locks = []
+                for p in sorted_plays:
+                    key = (p.get("headline"), p.get("stat_label"))
+                    if key in seen_locks:
+                        continue
+                    seen_locks.add(key)
+                    deduped_locks.append(p)
+                    if len(deduped_locks) >= LOCKS_LIMIT:
+                        break
+                LOCKS_CACHE["ts"] = time.time()
+                LOCKS_CACHE["data"] = deduped_locks
                 SPECIALS_CACHE["ts"] = time.time()
                 SPECIALS_CACHE["data"] = specials
 
@@ -858,6 +878,19 @@ def api_nrfi():
         ts = NRFI_CACHE["ts"]
         computing = PLAYS_CACHE["computing"]
     return jsonify({"nrfi": data, "ts": ts, "computing": computing})
+
+
+@app.route("/api/locks", methods=["GET"])
+@login_required
+def api_locks():
+    """Top N single plays of the night, uncapped by per-game diversification.
+    Used by the hero strip on the dashboard so it shows the truly highest-
+    probability plays — not just the top of the diversified board."""
+    with _PLAYS_LOCK:
+        data = list(LOCKS_CACHE["data"])
+        ts = LOCKS_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+    return jsonify({"locks": data, "ts": ts, "computing": computing})
 
 
 @app.route("/api/hrr-combo", methods=["GET"])
