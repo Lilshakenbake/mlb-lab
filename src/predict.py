@@ -1042,6 +1042,12 @@ def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_i
         lineup_pos_factor = 0.92
     else:
         lineup_pos_factor = 0.85
+    # Runs-scored proxy: about 45% of hits convert to a run scored at the
+    # league level (R/H ≈ 0.45 for non-pitcher batters), with a small
+    # lineup-slot bump for top-of-order hitters who get driven in more.
+    # We derive runs from hits (rather than RBIs) because hits are the
+    # actual baserunner event upstream of scoring; RBIs are downstream
+    # and would double-count the same run-creation event.
     runs_proj = hits_avg * 0.45 * lineup_pos_factor
 
     # Combine the same context factors hits/RBI props would each get (use
@@ -1111,10 +1117,13 @@ def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_i
     # This prop is one-sided — the bet is "yes, the player records at
     # least 1 of H/R/RBI" (line 0.5). No UNDER side. Skip plays that
     # don't clear a useful confidence floor; the board only shows the
-    # high-floor picks this prop is designed for.
+    # high-floor picks this prop is designed for. Cap is applied here
+    # and re-used for fair_odds so the displayed probability and the
+    # implied odds stay consistent.
     pick = "OVER" if union_prob >= 0.55 else "PASS"
     edge = round(union_prob - 0.50, 2)  # edge over a 50/50 baseline
-    probability = max(min(round(union_prob * 100, 1), 78.0), 22.0)
+    capped_prob = max(0.22, min(0.78, union_prob))
+    probability = round(capped_prob * 100, 1)
 
     why_bits = []
     if abs(park_f - 1.0) >= 0.04:
@@ -1137,5 +1146,5 @@ def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_i
         "probability": probability,
         "matchup_note": ", ".join(why_bits) if why_bits else "",
         "model_used": False,
-        "fair_odds": _prob_to_american(union_prob),
+        "fair_odds": _prob_to_american(capped_prob),
     }

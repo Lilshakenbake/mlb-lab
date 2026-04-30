@@ -630,14 +630,14 @@
               </div>`;
         }).join("");
         return `
-            <div class="card play-card" style="border-left:4px solid #fde047;">
+            <div class="card play-card" style="border-left:4px solid #a855f7;">
               <div>
-                <div class="matchup" style="color:#fde047;">💎 Best Bases Parlay</div>
+                <div class="matchup" style="color:#c084fc;">💎 Best Bases Parlay</div>
                 <div class="detail" style="color:#94a3b8; font-size:12px;">3-leg total bases · highest-floor stat in baseball</div>
                 ${legs}
                 <div class="detail"><strong>Fair odds:</strong> ${escape(s.fair_odds)} · <strong>Payout:</strong> +${escape(s.payout_units)}u on 1u</div>
               </div>
-              <div class="prob-big" style="color:#fde047;">${escape(s.combined_probability)}%</div>
+              <div class="prob-big" style="color:#c084fc;">${escape(s.combined_probability)}%</div>
             </div>`;
     };
 
@@ -705,7 +705,9 @@
         return "prob-fair";
     };
 
-    const cardHtml = (c) => {
+    let lastCombos = [];
+
+    const cardHtml = (c, idx) => {
         const link = c.game_pk ? `/game/${c.game_pk}` : "#";
         const projBit = c.projection != null
             ? `<div class="detail"><strong>Expected H+R+RBI:</strong> ${escape(c.projection)}</div>`
@@ -731,15 +733,64 @@
                 </div>
                 <div class="prob-big ${probTier(c.probability)}">${escape(c.probability)}%</div>
               </a>
+              <button class="track-btn hrr-track-btn" data-idx="${idx}">+ Track</button>
             </div>`;
     };
 
+    const wireTrackButtons = () => {
+        grid.querySelectorAll(".hrr-track-btn").forEach(btn => {
+            btn.addEventListener("click", async (ev) => {
+                ev.preventDefault();
+                if (btn.classList.contains("tracked")) return;
+                const idx = parseInt(btn.dataset.idx, 10);
+                const c = lastCombos[idx];
+                if (!c) return;
+                btn.disabled = true;
+                btn.textContent = "Saving…";
+                const play = {
+                    kind: "hitter_combo",
+                    headline: c.player,
+                    stat_label: "1+ H/R/RBI",
+                    pick: c.pick,
+                    line: c.line,
+                    projection: c.projection,
+                    edge: c.edge,
+                    probability: c.probability,
+                    matchup: c.matchup,
+                    game_pk: c.game_pk,
+                    model_used: c.model_used || false,
+                };
+                try {
+                    const resp = await fetch("/api/track", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        credentials: "same-origin",
+                        body: JSON.stringify(play),
+                    });
+                    const data = await resp.json();
+                    if (data.ok) {
+                        btn.classList.add("tracked");
+                        btn.textContent = data.duplicate ? "Already tracked" : "Tracked ✓";
+                    } else {
+                        btn.textContent = "Failed — retry";
+                        btn.disabled = false;
+                    }
+                } catch (e) {
+                    btn.textContent = "Failed — retry";
+                    btn.disabled = false;
+                }
+            });
+        });
+    };
+
     const render = (combos) => {
+        lastCombos = combos || [];
         if (!combos || combos.length === 0) {
             grid.innerHTML = '<div class="card empty">No combo plays yet — still computing.</div>';
             return;
         }
-        grid.innerHTML = combos.map(cardHtml).join("");
+        grid.innerHTML = combos.map((c, i) => cardHtml(c, i)).join("");
+        wireTrackButtons();
     };
 
     const load = () => {
