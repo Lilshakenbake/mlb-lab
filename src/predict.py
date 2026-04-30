@@ -998,3 +998,135 @@ def compute_nrfi(game, home_pitcher_profile, away_pitcher_profile, weather, park
         "why": why,
         "fair_odds": _prob_to_american(nrfi_prob if pick == "NRFI" else (1 - nrfi_prob)),
     }
+
+
+def compute_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_idx,
+                      weather, park_name=None, opp_team=None, line=1.5):
+    """Combined Hits + Runs + RBIs prop.
+
+    Books offer this as a single prop where you bet OVER/UNDER 1.5 (or 2.5)
+    on the SUM of a hitter's hits, runs scored, and RBIs in one game. It
+    typically hits 75-85% on the right matchups because the player only
+    needs to contribute in any one of three ways.
+
+    We re-use the same context machinery as build_hitter_prop (park, platoon,
+    bullpen, weather, hot streak) and approximate runs scored from hits with
+    a 0.45 multiplier (league average runs/hit ratio for non-pitcher batters).
+    """
+    if not hitter_profile:
+        return None
+    hits_avg = float(hitter_profile.get("hits_avg") or 0.0)
+    tb_avg = float(hitter_profile.get("tb_avg") or 0.0)
+    rbi_avg = float(hitter_profile.get("rbi_avg") or 0.0)
+    if hits_avg <= 0 and rbi_avg <= 0:
+        return None
+
+    # Approximate projected runs scored: leadoff/top-3 hitters cross more often.
+    # League non-pitcher R/H ≈ 0.45. Top-of-order gets +15-20%, bottom -10-15%.
+    if lineup_idx is None:
+        lineup_pos_factor = 1.0
+    elif lineup_idx <= 1:
+        lineup_pos_factor = 1.20  # leadoff / 2-hole
+    elif lineup_idx <= 3:
+        lineup_pos_factor = 1.10
+    elif lineup_idx <= 5:
+        lineup_pos_factor = 1.0
+    elif lineup_idx <= 7:
+        lineup_pos_factor = 0.92
+    else:
+        lineup_pos_factor = 0.85
+    runs_proj = hits_avg * 0.45 * lineup_pos_factor
+
+    # Combine the same context factors hits/RBI props would each get (use
+    # the hits-stat factor as a representative offensive-context multiplier).
+    park_f = _get_park_factor(park_name).get("hits", 1.0) if park_name else 1.0
+    pitcher_k_f = _pitcher_k_damper("hits", (opp_pitcher_profile or {}).get("strikeouts_avg"))
+    platoon_f = _platoon_factor(
+        "hits",
+        (hitter_profile or {}).get("hand"),
+        (opp_pitcher_profile or {}).get("hand"),
+        hitter_profile=hitter_profile,
+        pitcher_profile=opp_pitcher_profile,
+    )
+    hot_f = _hot_factor((hitter_profile or {}).get("hot_ratio"))
+
+    pen_f = 1.0
+    if opp_team:
+        try:
+            from src.bullpen_factors import get_bullpen_factor
+            raw_pen = get_bullpen_factor(opp_team).get("hits", 1.0)
+            pen_f = 1.0 + (raw_pen - 1.0) * 0.30
+        except Exception:
+            pen_f = 1.0
+
+    # Weather: warm + helpful wind nudges total offensive output up.
+    weather_boost = 0.0
+    if weather and not weather.get("is_indoor"):
+        try:
+            temp = float(weather.get("temperature", 70) or 70)
+            wind = float(weather.get("wind_speed", 0) or 0)
+            if temp >= 80:
+                weather_boost += 0.05 * hits_avg
+            if wind >= 12 and (weather.get("wind_dir_factor", 0) or 0) > 0:
+                weather_boost += 0.04 * hits_avg
+        except Exception:
+            pass
+
+    context = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * pen_f)
+    base_sum = (hits_avg + runs_proj + rbi_avg) * context + weather_boost
+
+    # Variance estimate — at least one of the three components hitting 1+
+    # is a high-floor outcome. Use a Poisson-ish CDF on the SUM.
+    # P(sum >= line+0.5) where sum ~ Poisson(base_sum). For non-integer line
+    # we use the half-step convention book uses (1.5 → need 2+).
+    threshold = int(line + 0.5) + (1 if (line - int(line)) >= 0.49 else 0)
+    # threshold = number you need to hit to clear OVER 1.5 → 2
+    if line <= 0.5:
+        threshold = 1
+    elif line <= 1.5:
+        threshold = 2
+    elif line <= 2.5:
+        threshold = 3
+    else:
+        threshold = int(line) + 1
+
+    import math
+    lam = max(0.05, base_sum)
+    # P(X >= threshold) = 1 - sum_{k=0}^{threshold-1} e^-lam lam^k / k!
+    cdf = 0.0
+    for k in range(threshold):
+        cdf += math.exp(-lam) * (lam ** k) / math.factorial(k)
+    over_prob = max(0.0, min(1.0, 1.0 - cdf))
+
+    edge = round(base_sum - line, 2)
+    if abs(edge) < 0.20:
+        pick = "PASS"
+    else:
+        pick = "OVER" if edge > 0 else "UNDER"
+    probability = over_prob * 100 if pick == "OVER" else (1 - over_prob) * 100
+    # Same realism cap as other props.
+    probability = max(min(round(probability, 1), 78.0), 22.0)
+
+    why_bits = []
+    if abs(park_f - 1.0) >= 0.04:
+        why_bits.append(f"park {park_f - 1:+.0%}")
+    if abs(platoon_f - 1.0) >= 0.04:
+        why_bits.append(f"platoon {platoon_f - 1:+.0%}")
+    if abs(hot_f - 1.0) >= 0.04:
+        why_bits.append(f"trend {hot_f - 1:+.0%}")
+    if lineup_pos_factor != 1.0:
+        why_bits.append(f"slot {(lineup_pos_factor-1)*100:+.0f}%")
+
+    return {
+        "stat_type": "hrr_combo",
+        "player": player_name,
+        "pitcher": (opp_pitcher_profile or {}).get("name") or "TBD",
+        "line": line,
+        "projection": round(base_sum, 2),
+        "edge": edge,
+        "pick": pick,
+        "probability": probability,
+        "matchup_note": ", ".join(why_bits) if why_bits else "",
+        "model_used": False,
+        "fair_odds": _prob_to_american(over_prob if pick == "OVER" else 1 - over_prob),
+    }

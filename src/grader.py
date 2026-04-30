@@ -28,6 +28,11 @@ BAT_FIELD_MAP = {
     "RBIs": "rbi",
 }
 
+# Combo prop: sum of multiple boxscore fields (e.g. H+R+RBI).
+COMBO_FIELD_MAP = {
+    "H+R+RBI": ("hits", "runs", "rbi"),
+}
+
 
 def _fetch_feed(game_pk: int) -> Optional[dict]:
     try:
@@ -108,6 +113,11 @@ def _find_player_actual(feed: dict, headline: str, stat_label: str) -> Optional[
                 field = BAT_FIELD_MAP[stat_label]
                 if field in bat:
                     return float(bat[field])
+            elif stat_label in COMBO_FIELD_MAP:
+                bat = stats.get("batting", {}) or {}
+                fields = COMBO_FIELD_MAP[stat_label]
+                if all(f in bat for f in fields):
+                    return float(sum(bat[f] for f in fields))
             elif stat_label == "Strikeouts":
                 pit = stats.get("pitching", {}) or {}
                 if "strikeOuts" in pit:
@@ -193,7 +203,7 @@ def _grade_runline(feed: dict, headline: str):
 
 def _grade_one(feed: dict, play: dict):
     kind = play.get("kind")
-    if kind in ("hitter", "pitcher"):
+    if kind in ("hitter", "pitcher", "hitter_combo"):
         actual = _find_player_actual(feed, play.get("headline", ""), play.get("stat_label", ""))
         return _grade_over_under(actual, play.get("line"), play.get("pick"))
     if kind == "moneyline":

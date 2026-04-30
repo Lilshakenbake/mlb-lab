@@ -21,6 +21,7 @@ from src.predict import (
     build_spread_lean,
     compute_hr_threat,
     compute_nrfi,
+    compute_hrr_combo,
 )
 
 PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "16"))
@@ -47,8 +48,16 @@ _PLAYS_LOCK = threading.Lock()
 # always 0.5 and the standard edge logic biases toward UNDER.
 HR_THREATS_CACHE = {"ts": 0, "data": []}
 NRFI_CACHE = {"ts": 0, "data": []}
-SPECIALS_CACHE = {"ts": 0, "data": {"run_line": None, "sgp": None, "cross_parlay": None, "hr_pair": None}}
+SPECIALS_CACHE = {"ts": 0, "data": {
+    "run_line": None,
+    "sgp": None,
+    "cross_parlay": None,
+    "hr_pair": None,
+    "bases_parlay": None,
+}}
 HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "12"))
+HRR_COMBO_CACHE = {"ts": 0, "data": []}
+HRR_COMBO_LIMIT = int(os.getenv("HRR_COMBO_LIMIT", "12"))
 
 STAT_LABELS = {
     "hits": "Hits",
@@ -320,6 +329,32 @@ def build_game_boards(game):
         nrfi["home_pitcher"] = home_pitcher_name
         nrfi["away_pitcher"] = away_pitcher_name
 
+    # ── H+R+RBI combo prop board: one row per hitter with combined hits +
+    # runs + RBIs probability. Books offer this as a single-leg prop.
+    hrr_combo = []
+    for idx, (_, name, profile) in enumerate(away_hitters):
+        c = compute_hrr_combo(
+            name, profile, home_pitcher_profile, idx, weather,
+            park_name=park_name, opp_team=game.get("home_team"),
+        )
+        if c and c["pick"] != "PASS":
+            c["matchup"] = matchup_label
+            c["game_pk"] = game.get("gamePk")
+            c["pitcher"] = home_pitcher_name
+            c["lineup_spot"] = idx + 1
+            hrr_combo.append(c)
+    for idx, (_, name, profile) in enumerate(home_hitters):
+        c = compute_hrr_combo(
+            name, profile, away_pitcher_profile, idx, weather,
+            park_name=park_name, opp_team=game.get("away_team"),
+        )
+        if c and c["pick"] != "PASS":
+            c["matchup"] = matchup_label
+            c["game_pk"] = game.get("gamePk")
+            c["pitcher"] = away_pitcher_name
+            c["lineup_spot"] = idx + 1
+            hrr_combo.append(c)
+
     return {
         "top_hits": sorted(top_hits, key=lambda x: x["probability"], reverse=True),
         "top_total_bases": sorted(top_total_bases, key=lambda x: x["probability"], reverse=True),
@@ -332,6 +367,7 @@ def build_game_boards(game):
         "projected_mode": projected_mode,
         "hr_threats": hr_threats,
         "nrfi": nrfi,
+        "hrr_combo": sorted(hrr_combo, key=lambda x: x["probability"], reverse=True),
     }
 
 
@@ -379,6 +415,24 @@ def _build_plays_for_game(game):
                 "matchup": matchup,
                 "game_pk": game.get("gamePk"),
             })
+
+    # H+R+RBI combo prop — surfaces as a regular play card too.
+    for prop in boards.get("hrr_combo", []):
+        if prop.get("pick") == "PASS":
+            continue
+        out.append({
+            "kind": "hitter_combo",
+            "headline": prop.get("player", ""),
+            "stat_label": "H+R+RBI",
+            "pick": prop.get("pick"),
+            "line": prop.get("line"),
+            "projection": prop.get("projection"),
+            "edge": prop.get("edge"),
+            "probability": prop.get("probability", 0),
+            "model_used": prop.get("model_used", False),
+            "matchup": matchup,
+            "game_pk": game.get("gamePk"),
+        })
 
     for prop in boards.get("top_strikeouts", []):
         if prop.get("pick") == "PASS":
@@ -461,7 +515,13 @@ def _build_specials(sorted_plays, sorted_hr):
        2. Best 3-Leg Same-Game Parlay
        3. Best 3-Leg Cross-Game Parlay (any players, any stat)
        4. Best HR Pair (2-leg)"""
-    specials = {"run_line": None, "sgp": None, "cross_parlay": None, "hr_pair": None}
+    specials = {
+        "run_line": None,
+        "sgp": None,
+        "cross_parlay": None,
+        "hr_pair": None,
+        "bases_parlay": None,
+    }
 
     # ── 1. Best Run Line ──────────────────────────────────────────────────
     run_lines = [p for p in sorted_plays if p.get("kind") == "runline"]
@@ -576,7 +636,49 @@ def _build_specials(sorted_plays, sorted_hr):
             "payout_units": payout,
         }
 
-    # ── 4. Best HR Pair ───────────────────────────────────────────────────
+    # ── 4. Best Bases Parlay (3-leg, total-bases only) ───────────────────
+    # Total bases is the highest-floor stat — a single counts. Build a
+    # cross-game 3-leg parlay using ONLY TB plays for a more reliable winner.
+    tb_legs = []
+    tb_games_used = set()
+    tb_players_used = set()
+    for p in sorted_plays:
+        if p.get("stat_label") != "Total Bases":
+            continue
+        if (p.get("probability") or 0) < 60:
+            continue
+        gpk = p.get("game_pk")
+        player = p.get("headline")
+        if gpk in tb_games_used or player in tb_players_used:
+            continue
+        tb_legs.append(p)
+        tb_games_used.add(gpk)
+        tb_players_used.add(player)
+        if len(tb_legs) == 3:
+            break
+
+    if len(tb_legs) == 3:
+        probs = [(p.get("probability") or 0) / 100.0 for p in tb_legs]
+        combined = probs[0] * probs[1] * probs[2]
+        payout, combined_pct = _parlay_payout_units(probs)
+        specials["bases_parlay"] = {
+            "legs": [
+                {
+                    "player": p.get("headline"),
+                    "stat": p.get("stat_label"),
+                    "pick": f'{p.get("pick")} {p.get("line")}',
+                    "matchup": p.get("matchup"),
+                    "probability": p.get("probability"),
+                    "game_pk": p.get("game_pk"),
+                }
+                for p in tb_legs
+            ],
+            "combined_probability": combined_pct,
+            "fair_odds": _prob_to_american(combined),
+            "payout_units": payout,
+        }
+
+    # ── 5. Best HR Pair ───────────────────────────────────────────────────
     if len(sorted_hr) >= 2:
         # Top two HR threats — could be same or different games.
         h1, h2 = sorted_hr[0], sorted_hr[1]
@@ -612,6 +714,7 @@ def _refresh_plays_blocking():
         all_plays = []
         all_hr_threats = []
         all_nrfi = []
+        all_hrr = []
 
         def _publish_partial():
             """Push current results into the cache so the UI can render them
@@ -620,6 +723,7 @@ def _refresh_plays_blocking():
             sorted_plays = sorted(all_plays, key=lambda p: p.get("probability", 0), reverse=True)
             sorted_hr = sorted(all_hr_threats, key=lambda x: x.get("probability", 0), reverse=True)
             sorted_nrfi = sorted(all_nrfi, key=lambda x: x.get("probability", 0), reverse=True)
+            sorted_hrr = sorted(all_hrr, key=lambda x: x.get("probability", 0), reverse=True)
             # Diversify the displayed plays — cap how many can come from the
             # SAME game so a single hot matchup doesn't crowd out the rest of
             # the slate. Without this, the user only sees plays from 3-5 games.
@@ -641,11 +745,13 @@ def _refresh_plays_blocking():
                 HR_THREATS_CACHE["data"] = sorted_hr[:HR_THREATS_LIMIT]
                 NRFI_CACHE["ts"] = time.time()
                 NRFI_CACHE["data"] = sorted_nrfi
+                HRR_COMBO_CACHE["ts"] = time.time()
+                HRR_COMBO_CACHE["data"] = sorted_hrr[:HRR_COMBO_LIMIT]
                 SPECIALS_CACHE["ts"] = time.time()
                 SPECIALS_CACHE["data"] = specials
 
         def _absorb_game(g):
-            """Run one game's board build and merge its plays + HR threats + NRFI."""
+            """Run one game's board build and merge its plays + HR threats + NRFI + HRR combo."""
             game_pk = g.get("gamePk")
             try:
                 all_plays.extend(_build_plays_for_game(g))
@@ -655,6 +761,7 @@ def _refresh_plays_blocking():
                     nrfi_entry = cached["data"].get("nrfi")
                     if nrfi_entry:
                         all_nrfi.append(nrfi_entry)
+                    all_hrr.extend(cached["data"].get("hrr_combo", []) or [])
             except Exception as e:
                 print(f"[plays-refresh] game {game_pk} failed: {e}")
             gc.collect()
@@ -678,6 +785,7 @@ def _refresh_plays_blocking():
                             nrfi_entry = cached["data"].get("nrfi")
                             if nrfi_entry:
                                 all_nrfi.append(nrfi_entry)
+                            all_hrr.extend(cached["data"].get("hrr_combo", []) or [])
                     except Exception as e:
                         print(f"[plays-refresh] game {game_pk} failed: {e}")
                     gc.collect()
@@ -750,6 +858,17 @@ def api_nrfi():
         ts = NRFI_CACHE["ts"]
         computing = PLAYS_CACHE["computing"]
     return jsonify({"nrfi": data, "ts": ts, "computing": computing})
+
+
+@app.route("/api/hrr-combo", methods=["GET"])
+@login_required
+def api_hrr_combo():
+    """Best Hits + Runs + RBIs combo prop board for tonight."""
+    with _PLAYS_LOCK:
+        data = list(HRR_COMBO_CACHE["data"])
+        ts = HRR_COMBO_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+    return jsonify({"combos": data, "ts": ts, "computing": computing})
 
 
 @app.route("/api/specials", methods=["GET"])
@@ -898,6 +1017,7 @@ def game_detail(game_pk):
             "top_home_runs": [],
             "top_rbis": [],
             "top_strikeouts": [],
+            "hrr_combo": [],
             "spread_lean": {
                 "ml_pick": "No side available",
                 "ml_probability": 0,
@@ -929,6 +1049,7 @@ def game_detail(game_pk):
         top_total_bases=_sort(boards["top_total_bases"]),
         top_rbis=_sort(boards["top_rbis"]),
         top_strikeouts=_sort(boards["top_strikeouts"]),
+        hrr_combo=_sort(boards.get("hrr_combo", [])),
         spread_lean=boards["spread_lean"],
         weather=boards["weather"],
         lineup_confirmed=boards["lineup_confirmed"],
