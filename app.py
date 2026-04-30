@@ -819,25 +819,29 @@ def _refresh_plays_blocking():
             PLAYS_CACHE["computing"] = False
 
 
-def get_plays_of_day_snapshot():
-    """Return what we have right now, kicking off a background refresh if stale."""
+def _ensure_plays_refresh():
+    """Kick off a background plays refresh if the cache is stale and no
+    refresh is already running. Caller holds nothing; returns whether the
+    cache is currently fresh (True = no refresh needed)."""
     now = time.time()
     with _PLAYS_LOCK:
         fresh = PLAYS_CACHE["data"] and now - PLAYS_CACHE["ts"] < PLAYS_CACHE_TTL_SECONDS
-        already_running = PLAYS_CACHE["computing"]
-        data = list(PLAYS_CACHE["data"])
-        ts = PLAYS_CACHE["ts"]
-        if not fresh and not already_running:
+        if not fresh and not PLAYS_CACHE["computing"]:
             PLAYS_CACHE["computing"] = True
             t = threading.Thread(target=_refresh_plays_blocking, daemon=True)
             t.start()
-            already_running = True
+    return fresh
 
-    return {
-        "plays": data,
-        "computing": already_running and not fresh,
-        "ts": ts,
-    }
+
+def get_plays_of_day_snapshot():
+    """Return what we have right now, kicking off a background refresh if stale."""
+    fresh = _ensure_plays_refresh()
+    with _PLAYS_LOCK:
+        return {
+            "plays": list(PLAYS_CACHE["data"]),
+            "computing": PLAYS_CACHE["computing"] and not fresh,
+            "ts": PLAYS_CACHE["ts"],
+        }
 
 
 @app.route("/", methods=["GET"])
@@ -884,6 +888,7 @@ def api_locks():
     """Top N single plays of the night, uncapped by per-game diversification.
     Used by the hero strip on the dashboard so it shows the truly highest-
     probability plays — not just the top of the diversified board."""
+    _ensure_plays_refresh()
     with _PLAYS_LOCK:
         data = list(LOCKS_CACHE["data"])
         ts = LOCKS_CACHE["ts"]
@@ -895,6 +900,7 @@ def api_locks():
 @login_required
 def api_hrr_combo():
     """Best Hits + Runs + RBIs combo prop board for tonight."""
+    _ensure_plays_refresh()
     with _PLAYS_LOCK:
         data = list(HRR_COMBO_CACHE["data"])
         ts = HRR_COMBO_CACHE["ts"]
