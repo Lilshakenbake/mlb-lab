@@ -709,8 +709,11 @@
 
     const cardHtml = (c, idx) => {
         const link = c.game_pk ? `/game/${c.game_pk}` : "#";
+        const oddsBit = c.fair_odds != null
+            ? ` · <strong>Fair odds:</strong> ${escape(c.fair_odds)}`
+            : "";
         const projBit = c.projection != null
-            ? `<div class="detail"><strong>Expected H+R+RBI:</strong> ${escape(c.projection)}</div>`
+            ? `<div class="detail"><strong>Expected H+R+RBI:</strong> ${escape(c.projection)}${oddsBit}</div>`
             : "";
         const whyBit = c.matchup_note
             ? `<div class="detail" style="font-size:11px; color:#fcd34d;">${escape(c.matchup_note)}</div>`
