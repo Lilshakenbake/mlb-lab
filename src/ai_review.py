@@ -65,9 +65,12 @@ def _under_daily_cap() -> bool:
 
 
 def _pick_key(p: dict) -> str:
-    """Stable identifier for one pick. Used both for the cache and to attach
-    GPT's verdicts back to the right pick."""
-    return "|".join(str(p.get(k, "?")) for k in ("headline", "stat_label", "matchup", "game_pk"))
+    """Stable identifier for one pick. Falls back to `player`/`pitcher` since
+    game-detail picks store the name there instead of `headline`."""
+    name = p.get("headline") or p.get("player") or p.get("pitcher") or "?"
+    stat = p.get("stat_label") or "?"
+    matchup = p.get("matchup") or "?"
+    return f"{name}|{stat}|{matchup}|{p.get('game_pk','?')}"
 
 
 def _cache_key(picks: list[dict]) -> str:
@@ -79,8 +82,9 @@ def _summarize_pick(i: int, p: dict) -> str:
     pick_side = p.get("pick") or "OVER"
     line = p.get("line")
     line_str = f" {pick_side} {line}" if line is not None else f" {pick_side}"
+    name = p.get("headline") or p.get("player") or p.get("pitcher") or "?"
     parts = [
-        f"{i}. {p.get('headline','?')}",
+        f"{i}. {name}",
         f"{p.get('stat_label','?')}{line_str}",
         f"prob {p.get('probability','?')}%",
     ]

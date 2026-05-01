@@ -1166,16 +1166,50 @@ def game_detail(game_pk):
     def _sort(items):
         return sorted(items or [], key=sort_key, reverse=True)
 
+    sorted_hits = _sort(boards["top_hits"])
+    sorted_hr = _sort(boards["top_home_runs"])
+    sorted_tb = _sort(boards["top_total_bases"])
+    sorted_rbi = _sort(boards["top_rbis"])
+    sorted_k = _sort(boards["top_strikeouts"])
+    sorted_hrr = _sort(boards.get("hrr_combo", []))
+
+    # On-demand AI review for THIS game's top picks. Single batched call,
+    # cached 6h via ai_review._CACHE so repeat opens are free. Top 2 from
+    # each category keeps the prompt small (~10-12 picks total).
+    try:
+        bundle = []
+        for items, label in (
+            (sorted_hits, "Hits"),
+            (sorted_hr, "Home Runs"),
+            (sorted_tb, "Total Bases"),
+            (sorted_rbi, "RBIs"),
+            (sorted_k, "Strikeouts"),
+            (sorted_hrr, "1+ H/R/RBI"),
+        ):
+            for p in items[:2]:
+                if p.get("pick") == "PASS":
+                    continue
+                # Tag stat_label so AI prompt + pick_key reflect category.
+                if not p.get("stat_label"):
+                    p["stat_label"] = label
+                bundle.append(p)
+        if bundle:
+            reviews = ai_review.review_picks(bundle, kind=f"game-{game_pk}")
+            if reviews:
+                ai_review.attach_reviews(bundle, reviews)
+    except Exception as e:
+        print(f"[ai-review] game {game_pk} failed: {e}")
+
     return render_template(
         "game_detail.html",
         game=game,
         error=None,
-        top_hits=_sort(boards["top_hits"]),
-        top_home_runs=_sort(boards["top_home_runs"]),
-        top_total_bases=_sort(boards["top_total_bases"]),
-        top_rbis=_sort(boards["top_rbis"]),
-        top_strikeouts=_sort(boards["top_strikeouts"]),
-        hrr_combo=_sort(boards.get("hrr_combo", [])),
+        top_hits=sorted_hits,
+        top_home_runs=sorted_hr,
+        top_total_bases=sorted_tb,
+        top_rbis=sorted_rbi,
+        top_strikeouts=sorted_k,
+        hrr_combo=sorted_hrr,
         spread_lean=boards["spread_lean"],
         weather=boards["weather"],
         lineup_confirmed=boards["lineup_confirmed"],
