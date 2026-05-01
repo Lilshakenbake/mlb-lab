@@ -1186,7 +1186,7 @@ def game_detail(game_pk):
             (sorted_k, "Strikeouts"),
             (sorted_hrr, "1+ H/R/RBI"),
         ):
-            for p in items[:2]:
+            for p in items:
                 if p.get("pick") == "PASS":
                     continue
                 # Tag stat_label so AI prompt + pick_key reflect category.
