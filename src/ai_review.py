@@ -24,14 +24,22 @@ except Exception:  # pragma: no cover - openai is optional at runtime
 
 _client = None
 _CACHE: dict[str, dict] = {}
-_CACHE_TTL = int(os.getenv("AI_REVIEW_TTL", "3600"))  # 1h
+_CACHE_TTL = int(os.getenv("AI_REVIEW_TTL", "21600"))  # 6h default — keeps cost minimal
 _MODEL = os.getenv("AI_REVIEW_MODEL", "gpt-4o-mini")
 _TIMEOUT = float(os.getenv("AI_REVIEW_TIMEOUT", "20"))
-_MAX_PICKS = int(os.getenv("AI_REVIEW_MAX_PICKS", "20"))
+_MAX_PICKS = int(os.getenv("AI_REVIEW_MAX_PICKS", "12"))
+_DISABLED = os.getenv("AI_REVIEW_DISABLED", "0") in ("1", "true", "True")
+# Hard daily call cap (defensive — prevents any runaway cost no matter
+# what triggers a refresh). Resets every 24h. Set AI_REVIEW_DAILY_CAP=0
+# to disable the cap.
+_DAILY_CAP = int(os.getenv("AI_REVIEW_DAILY_CAP", "20"))
+_call_log: list[float] = []
 
 
 def _get_client():
     global _client
+    if _DISABLED:
+        return None
     if _client is not None:
         return _client
     key = os.getenv("OPENAI_API_KEY")
@@ -43,6 +51,17 @@ def _get_client():
         print(f"[ai-review] client init failed: {e}")
         return None
     return _client
+
+
+def _under_daily_cap() -> bool:
+    """Drop entries older than 24h, then check whether we're still under
+    the per-day call cap. Cheap defensive guard against runaway cost."""
+    if _DAILY_CAP <= 0:
+        return True
+    cutoff = time.time() - 86400
+    while _call_log and _call_log[0] < cutoff:
+        _call_log.pop(0)
+    return len(_call_log) < _DAILY_CAP
 
 
 def _pick_key(p: dict) -> str:
@@ -98,6 +117,10 @@ def review_picks(picks: list[dict], kind: str = "picks") -> dict[str, dict]:
     cached = _CACHE.get(ck)
     if cached and time.time() - cached["ts"] < _CACHE_TTL:
         return cached["data"]
+    # Defensive: enforce per-day call cap.
+    if not _under_daily_cap():
+        print(f"[ai-review] daily cap of {_DAILY_CAP} hit — skipping call")
+        return {}
 
     summary = "\n".join(_summarize_pick(i + 1, p) for i, p in enumerate(picks))
     prompt = (
@@ -120,16 +143,28 @@ def review_picks(picks: list[dict], kind: str = "picks") -> dict[str, dict]:
     )
 
     try:
+        _call_log.append(time.time())
         resp = client.chat.completions.create(
             model=_MODEL,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             temperature=0.3,
-            max_tokens=700,
+            max_tokens=500,
             timeout=_TIMEOUT,
         )
         raw = resp.choices[0].message.content or "{}"
         parsed = json.loads(raw)
+        try:
+            usage = getattr(resp, "usage", None)
+            if usage:
+                print(
+                    f"[ai-review] call ok — model={_MODEL} "
+                    f"in={getattr(usage,'prompt_tokens','?')} "
+                    f"out={getattr(usage,'completion_tokens','?')} "
+                    f"daily={len(_call_log)}/{_DAILY_CAP}"
+                )
+        except Exception:
+            pass
     except Exception as e:
         print(f"[ai-review] {kind} failed: {e}")
         return {}
