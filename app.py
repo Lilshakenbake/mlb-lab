@@ -723,15 +723,25 @@ def _run_ai_review_pass():
         locks_snapshot = [copy.deepcopy(p) for p in LOCKS_CACHE["data"]]
         hrr_snapshot = [copy.deepcopy(c) for c in HRR_COMBO_CACHE["data"]]
         hr_snapshot = [copy.deepcopy(h) for h in HR_THREATS_CACHE["data"]]
-    bundle = locks_snapshot + hrr_snapshot[:6] + hr_snapshot[:6]
+        plays_snapshot = [copy.deepcopy(p) for p in PLAYS_CACHE["data"]]
+    # Tag categorical labels so _pick_key stays unique across boards and
+    # the AI prompt clearly states what each pick is for.
+    for h in hr_snapshot:
+        h.setdefault("stat_label", "Home Run")
+        h.setdefault("pick", "OVER")
+    for c in hrr_snapshot:
+        c.setdefault("stat_label", "1+ H/R/RBI")
+        c.setdefault("pick", "OVER")
+    bundle = locks_snapshot + hrr_snapshot + hr_snapshot + plays_snapshot
     if not bundle:
         return
-    reviews = ai_review.review_picks(bundle, kind="mlb-locks-hrr-hr")
+    reviews = ai_review.review_picks(bundle, kind="mlb-slate-all")
     if not reviews:
         return
     ai_review.attach_reviews(locks_snapshot, reviews)
     ai_review.attach_reviews(hrr_snapshot, reviews)
     ai_review.attach_reviews(hr_snapshot, reviews)
+    ai_review.attach_reviews(plays_snapshot, reviews)
     # Atomic publish — replace the list refs entirely so a reader holding
     # the old list never sees a dict get an `ai_review` key bolted on after
     # the fact.
@@ -739,7 +749,8 @@ def _run_ai_review_pass():
         LOCKS_CACHE["data"] = locks_snapshot
         HRR_COMBO_CACHE["data"] = hrr_snapshot
         HR_THREATS_CACHE["data"] = hr_snapshot
-    print(f"[ai-review] attached {len(reviews)} verdicts")
+        PLAYS_CACHE["data"] = plays_snapshot
+    print(f"[ai-review] attached {len(reviews)} verdicts across {len(bundle)} picks")
 
 
 def _refresh_plays_blocking():

@@ -363,6 +363,7 @@ window.__aiPill = function (r) {
             ? '<span class="play-pill pill-model">MODEL</span>'
             : "";
         const link = p.game_pk ? `/game/${p.game_pk}` : "#";
+        const aiBit = window.__aiPill ? window.__aiPill(p.ai_review) : "";
         return `
             <div class="card play-card">
               <a href="${link}" style="text-decoration:none; color:inherit;">
@@ -374,6 +375,7 @@ window.__aiPill = function (r) {
                   </div>
                   ${lineBit}
                   <div class="matchup-line">${escape(p.matchup)}</div>
+                  ${aiBit}
                 </div>
                 <div class="prob-big ${probTier(p.probability)}">${escape(p.probability)}%</div>
               </a>
@@ -467,6 +469,7 @@ window.__aiPill = function (r) {
         const fairBit = t.fair_odds
             ? `<div class="detail"><strong>Fair odds:</strong> ${escape(t.fair_odds)}</div>`
             : "";
+        const aiBit = window.__aiPill ? window.__aiPill(t.ai_review) : "";
         return `
             <div class="card play-card">
               <a href="${link}" style="text-decoration:none; color:inherit;">
@@ -480,6 +483,7 @@ window.__aiPill = function (r) {
                   </div>
                   ${fairBit}
                   ${why}
+                  ${aiBit}
                 </div>
                 <div class="prob-big" style="color:#fb923c;">${escape(t.probability)}% HR</div>
               </a>

@@ -27,12 +27,13 @@ _CACHE: dict[str, dict] = {}
 _CACHE_TTL = int(os.getenv("AI_REVIEW_TTL", "21600"))  # 6h default — keeps cost minimal
 _MODEL = os.getenv("AI_REVIEW_MODEL", "gpt-4o-mini")
 _TIMEOUT = float(os.getenv("AI_REVIEW_TIMEOUT", "20"))
-_MAX_PICKS = int(os.getenv("AI_REVIEW_MAX_PICKS", "12"))
+_MAX_PICKS = int(os.getenv("AI_REVIEW_MAX_PICKS", "120"))
+_BATCH_SIZE = int(os.getenv("AI_REVIEW_BATCH_SIZE", "20"))
 _DISABLED = os.getenv("AI_REVIEW_DISABLED", "0") in ("1", "true", "True")
 # Hard daily call cap (defensive — prevents any runaway cost no matter
 # what triggers a refresh). Resets every 24h. Set AI_REVIEW_DAILY_CAP=0
 # to disable the cap.
-_DAILY_CAP = int(os.getenv("AI_REVIEW_DAILY_CAP", "20"))
+_DAILY_CAP = int(os.getenv("AI_REVIEW_DAILY_CAP", "60"))
 _call_log: list[float] = []
 
 
@@ -121,75 +122,76 @@ def review_picks(picks: list[dict], kind: str = "picks") -> dict[str, dict]:
     cached = _CACHE.get(ck)
     if cached and time.time() - cached["ts"] < _CACHE_TTL:
         return cached["data"]
-    # Defensive: enforce per-day call cap.
-    if not _under_daily_cap():
-        print(f"[ai-review] daily cap of {_DAILY_CAP} hit — skipping call")
-        return {}
-
-    summary = "\n".join(_summarize_pick(i + 1, p) for i, p in enumerate(picks))
-    prompt = (
-        "You are a sharp, NEUTRAL MLB betting analyst giving a quick "
-        "second-opinion on a model's top picks tonight. The model uses Poisson "
-        "rate projections with park/weather/recent-form adjustments. For each "
-        "pick give an honest, balanced verdict — neither rubber-stamp nor "
-        "reflexively contrarian:\n"
-        "  - verdict: AGREE (you support the pick), LEAN (mostly support, with "
-        "    a caveat), or FADE (you actively disagree because of a concrete "
-        "    angle the model may be missing)\n"
-        "  - confidence: HIGH, MED, or LOW\n"
-        "  - note: ONE short sentence (<=18 words) citing a specific angle "
-        "    (park, weather, lineup spot, recent form, pitcher matchup, "
-        "    bullpen, weather, regression risk). Do NOT default to FADE just "
-        "    because the probability is high.\n\n"
-        f"Category: {kind}\n"
-        f"Picks:\n{summary}\n\n"
-        'Respond as JSON: {"reviews":[{"i":1,"verdict":"AGREE","confidence":"HIGH","note":"..."}]}'
-    )
-
-    try:
-        _call_log.append(time.time())
-        resp = client.chat.completions.create(
-            model=_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-            max_tokens=500,
-            timeout=_TIMEOUT,
-        )
-        raw = resp.choices[0].message.content or "{}"
-        parsed = json.loads(raw)
-        try:
-            usage = getattr(resp, "usage", None)
-            if usage:
-                print(
-                    f"[ai-review] call ok — model={_MODEL} "
-                    f"in={getattr(usage,'prompt_tokens','?')} "
-                    f"out={getattr(usage,'completion_tokens','?')} "
-                    f"daily={len(_call_log)}/{_DAILY_CAP}"
-                )
-        except Exception:
-            pass
-    except Exception as e:
-        print(f"[ai-review] {kind} failed: {e}")
-        return {}
 
     out: dict[str, dict] = {}
-    for r in parsed.get("reviews", []) or []:
-        idx = r.get("i")
-        if not isinstance(idx, int) or idx < 1 or idx > len(picks):
+    # Chunk into batches so the model isn't tempted to skip picks when the
+    # output token budget gets tight. Each batch is independently capped.
+    for start in range(0, len(picks), _BATCH_SIZE):
+        if not _under_daily_cap():
+            print(f"[ai-review] daily cap of {_DAILY_CAP} hit — partial result")
+            break
+        chunk = picks[start:start + _BATCH_SIZE]
+        summary = "\n".join(_summarize_pick(i + 1, p) for i, p in enumerate(chunk))
+        prompt = (
+            "You are a sharp, NEUTRAL MLB betting analyst giving a quick "
+            "second-opinion on a model's top picks tonight. The model uses Poisson "
+            "rate projections with park/weather/recent-form adjustments. You MUST "
+            "return one verdict for EVERY pick (do not skip any). For each pick:\n"
+            "  - verdict: AGREE (support), LEAN (mostly support with caveat), or "
+            "    FADE (actively disagree on a concrete angle)\n"
+            "  - confidence: HIGH, MED, or LOW\n"
+            "  - note: ONE short sentence (<=18 words) citing a specific angle "
+            "    (park, weather, lineup spot, recent form, pitcher matchup, "
+            "    bullpen, regression risk). Do NOT default to FADE just because "
+            "    the probability is high.\n\n"
+            f"Category: {kind} (batch {start//_BATCH_SIZE + 1})\n"
+            f"Picks ({len(chunk)} total — return {len(chunk)} reviews):\n{summary}\n\n"
+            'Respond as JSON: {"reviews":[{"i":1,"verdict":"AGREE","confidence":"HIGH","note":"..."}]}'
+        )
+
+        try:
+            _call_log.append(time.time())
+            resp = client.chat.completions.create(
+                model=_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.3,
+                max_tokens=2000,
+                timeout=_TIMEOUT,
+            )
+            raw = resp.choices[0].message.content or "{}"
+            parsed = json.loads(raw)
+            try:
+                usage = getattr(resp, "usage", None)
+                if usage:
+                    print(
+                        f"[ai-review] batch {start//_BATCH_SIZE + 1} ok — "
+                        f"in={getattr(usage,'prompt_tokens','?')} "
+                        f"out={getattr(usage,'completion_tokens','?')} "
+                        f"daily={len(_call_log)}/{_DAILY_CAP}"
+                    )
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[ai-review] {kind} batch {start//_BATCH_SIZE + 1} failed: {e}")
             continue
-        verdict = str(r.get("verdict", "")).strip().upper()
-        if verdict not in ("AGREE", "LEAN", "FADE"):
-            continue
-        confidence = str(r.get("confidence", "")).strip().upper()
-        if confidence not in ("HIGH", "MED", "LOW"):
-            confidence = "MED"
-        note = str(r.get("note", "")).strip()
-        out[_pick_key(picks[idx - 1])] = {
-            "verdict": verdict,
-            "confidence": confidence,
-            "note": note[:240],
-        }
+
+        for r in parsed.get("reviews", []) or []:
+            idx = r.get("i")
+            if not isinstance(idx, int) or idx < 1 or idx > len(chunk):
+                continue
+            verdict = str(r.get("verdict", "")).strip().upper()
+            if verdict not in ("AGREE", "LEAN", "FADE"):
+                continue
+            confidence = str(r.get("confidence", "")).strip().upper()
+            if confidence not in ("HIGH", "MED", "LOW"):
+                confidence = "MED"
+            note = str(r.get("note", "")).strip()
+            out[_pick_key(chunk[idx - 1])] = {
+                "verdict": verdict,
+                "confidence": confidence,
+                "note": note[:240],
+            }
 
     _CACHE[ck] = {"ts": time.time(), "data": out}
     return out
