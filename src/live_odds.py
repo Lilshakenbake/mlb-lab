@@ -1,0 +1,268 @@
+"""Live sportsbook odds via The Odds API (the-odds-api.com).
+
+Compares our model's fair odds vs the actual prices at DraftKings, FanDuel,
+MGM, Caesars, etc. Surfaces edge % so we only fire when a book is stale
+relative to our number — the only thing that beats sportsbooks long-term.
+
+Quota strategy (free tier = 500 req/month):
+- Game odds (h2h/spreads/totals): 1 request returns ALL games for the slate.
+  Refresh every 2 hours during the day → ~12/day → ~360/month. Fits.
+- Player props: skipped in MVP (each prop market = 1 quota PER game; would
+  burn the budget in a day). Add as on-demand v2 once usage is proven.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from typing import Optional
+
+import requests
+
+from src import cache as _cache
+
+API_KEY = os.getenv("ODDS_API_KEY", "").strip()
+BASE = "https://api.the-odds-api.com/v4"
+SPORT = "baseball_mlb"
+REGIONS = "us"
+GAME_MARKETS = "h2h,spreads,totals"
+GAME_TTL = 2 * 3600  # 2 hours
+TIMEOUT = 10
+
+# Track last quota usage from response headers so we can show it in UI.
+_USAGE = {"used": None, "remaining": None, "ts": None}
+
+
+def is_enabled() -> bool:
+    return bool(API_KEY)
+
+
+def get_usage() -> dict:
+    return dict(_USAGE)
+
+
+def _american_to_prob(american: float) -> float:
+    """Convert American odds to implied probability (with vig)."""
+    a = float(american)
+    if a >= 0:
+        return 100.0 / (a + 100.0)
+    return -a / (-a + 100.0)
+
+
+def _devig(prob_a: float, prob_b: float) -> tuple[float, float]:
+    """Strip the book's vig from a 2-way market by proportional scaling."""
+    s = prob_a + prob_b
+    if s <= 0:
+        return prob_a, prob_b
+    return prob_a / s, prob_b / s
+
+
+def fetch_game_odds() -> Optional[list]:
+    """Pull moneyline + spread + total for every MLB game today.
+    Returns the raw odds list or None on failure. Cached 2hr to disk."""
+    if not is_enabled():
+        return None
+
+    cached = _cache.get("live_odds_games", "today", GAME_TTL)
+    if cached is not None:
+        return cached
+
+    url = f"{BASE}/sports/{SPORT}/odds"
+    params = {
+        "apiKey": API_KEY,
+        "regions": REGIONS,
+        "markets": GAME_MARKETS,
+        "oddsFormat": "american",
+        "dateFormat": "iso",
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=TIMEOUT)
+        # Capture quota headers for the UI.
+        try:
+            _USAGE["used"] = int(resp.headers.get("x-requests-used", 0))
+            _USAGE["remaining"] = int(resp.headers.get("x-requests-remaining", 0))
+            _USAGE["ts"] = time.time()
+        except (TypeError, ValueError):
+            pass
+        if resp.status_code != 200:
+            print(f"[live-odds] HTTP {resp.status_code}: {resp.text[:200]}")
+            return None
+        data = resp.json()
+        _cache.put("live_odds_games", "today", data)
+        return data
+    except Exception as e:
+        print(f"[live-odds] fetch failed: {e}")
+        return None
+
+
+def _team_match(name: str, target: str) -> bool:
+    """Loose team-name match. The Odds API uses full names ('New York Yankees')
+    while our internal names may be partial ('Yankees')."""
+    if not name or not target:
+        return False
+    n = name.lower()
+    t = target.lower()
+    return t in n or n in t
+
+
+def find_game(odds_list: list, home_team: str, away_team: str) -> Optional[dict]:
+    """Locate a single game in the odds list by team names."""
+    if not odds_list:
+        return None
+    for g in odds_list:
+        if _team_match(g.get("home_team", ""), home_team) and \
+           _team_match(g.get("away_team", ""), away_team):
+            return g
+    return None
+
+
+def best_moneyline(game_odds: dict, team_name: str) -> Optional[dict]:
+    """Return {book, american, prob} for the best (highest payout) ML on `team_name`."""
+    if not game_odds or not team_name:
+        return None
+    best = None
+    for bm in game_odds.get("bookmakers", []):
+        for mk in bm.get("markets", []):
+            if mk.get("key") != "h2h":
+                continue
+            for o in mk.get("outcomes", []):
+                if not _team_match(o.get("name", ""), team_name):
+                    continue
+                price = o.get("price")
+                if price is None:
+                    continue
+                if best is None or price > best["american"]:
+                    best = {
+                        "book": bm.get("title", "?"),
+                        "american": int(price),
+                        "prob": _american_to_prob(price),
+                    }
+    return best
+
+
+def best_runline(game_odds: dict, team_name: str, side: str) -> Optional[dict]:
+    """Best run-line price. side='-1.5' for favorite, '+1.5' for dog."""
+    if not game_odds or not team_name:
+        return None
+    target_point = -1.5 if "-" in side else 1.5
+    best = None
+    for bm in game_odds.get("bookmakers", []):
+        for mk in bm.get("markets", []):
+            if mk.get("key") != "spreads":
+                continue
+            for o in mk.get("outcomes", []):
+                if not _team_match(o.get("name", ""), team_name):
+                    continue
+                if o.get("point") != target_point:
+                    continue
+                price = o.get("price")
+                if price is None:
+                    continue
+                if best is None or price > best["american"]:
+                    best = {
+                        "book": bm.get("title", "?"),
+                        "american": int(price),
+                        "point": target_point,
+                        "prob": _american_to_prob(price),
+                    }
+    return best
+
+
+def best_total(game_odds: dict, side: str) -> Optional[dict]:
+    """Best price + line for over/under. side='Over' or 'Under'.
+    Returns the most common line across books with the best price."""
+    if not game_odds:
+        return None
+    target = side.lower()
+    best = None
+    for bm in game_odds.get("bookmakers", []):
+        for mk in bm.get("markets", []):
+            if mk.get("key") != "totals":
+                continue
+            for o in mk.get("outcomes", []):
+                if str(o.get("name", "")).lower() != target:
+                    continue
+                price = o.get("price")
+                point = o.get("point")
+                if price is None or point is None:
+                    continue
+                if best is None or price > best["american"]:
+                    best = {
+                        "book": bm.get("title", "?"),
+                        "american": int(price),
+                        "point": point,
+                        "prob": _american_to_prob(price),
+                    }
+    return best
+
+
+def edge_pct(model_prob: float, book_american: float) -> float:
+    """Probability edge in percentage points: model_prob - implied_prob.
+
+    A +5% edge means our model gives the bet 5pp more chance than the book's
+    line implies. Sharp bettors look for 3pp+; 5pp is great, 8pp+ is huge.
+    Anything past ~12pp usually means our model is overconfident or the line
+    is stale, not a real edge."""
+    try:
+        implied = _american_to_prob(book_american)
+        return round((float(model_prob) - implied) * 100, 1)
+    except Exception:
+        return 0.0
+
+
+def ev_pct(model_prob: float, book_american: float) -> float:
+    """Expected value per $1 staked, as a percentage. Useful for Kelly sizing."""
+    try:
+        if book_american >= 0:
+            payout = book_american / 100.0
+        else:
+            payout = 100.0 / abs(book_american)
+        ev = float(model_prob) * payout - (1 - float(model_prob))
+        return round(ev * 100, 1)
+    except Exception:
+        return 0.0
+
+
+def attach_game_edges(spread_lean: dict, game: dict, odds_list: list) -> dict:
+    """Mutates `spread_lean`, adding live-book pricing + edge for ML and run line.
+
+    Adds keys:
+      ml_book, ml_book_odds, ml_edge_pct
+      rl_book, rl_book_odds, rl_edge_pct
+    Falls back silently when no matching market/team is found.
+    """
+    if not spread_lean or not odds_list:
+        return spread_lean
+    g = find_game(odds_list, game.get("home_team"), game.get("away_team"))
+    if not g:
+        return spread_lean
+
+    # ── Moneyline edge ──
+    ml_pick = spread_lean.get("ml_pick", "")
+    ml_team = ml_pick.replace(" ML", "").strip()
+    ml_best = best_moneyline(g, ml_team)
+    if ml_best:
+        model_p = float(spread_lean.get("ml_probability", 0)) / 100.0
+        spread_lean["ml_book"] = ml_best["book"]
+        spread_lean["ml_book_odds"] = ml_best["american"]
+        spread_lean["ml_edge_pct"] = edge_pct(model_p, ml_best["american"])
+        spread_lean["ml_ev_pct"] = ev_pct(model_p, ml_best["american"])
+
+    # ── Run line edge ──
+    rl_pick = spread_lean.get("run_line_pick", "")
+    if " -1.5" in rl_pick:
+        team = rl_pick.split(" -1.5")[0].strip()
+        rl_best = best_runline(g, team, "-1.5")
+    elif " +1.5" in rl_pick:
+        team = rl_pick.split(" +1.5")[0].strip()
+        rl_best = best_runline(g, team, "+1.5")
+    else:
+        rl_best = None
+    if rl_best:
+        model_p = float(spread_lean.get("run_line_probability", 0)) / 100.0
+        spread_lean["rl_book"] = rl_best["book"]
+        spread_lean["rl_book_odds"] = rl_best["american"]
+        spread_lean["rl_edge_pct"] = edge_pct(model_p, rl_best["american"])
+        spread_lean["rl_ev_pct"] = ev_pct(model_p, rl_best["american"])
+
+    return spread_lean

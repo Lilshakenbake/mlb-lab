@@ -303,6 +303,17 @@ def build_game_boards(game):
         weather=weather,
     )
 
+    # ── Live sportsbook edge: compare our model vs DraftKings/FanDuel/etc ──
+    # Skipped silently if no API key or fetch fails (graceful degradation).
+    try:
+        from src import live_odds
+        if live_odds.is_enabled():
+            odds_list = live_odds.fetch_game_odds()
+            if odds_list:
+                live_odds.attach_game_edges(spread_lean, game, odds_list)
+    except Exception as e:
+        print(f"[live-odds] attach failed: {e}")
+
     # HR Threats — pure probability ranking, independent of line edge.
     matchup_label = f"{game['away_team']} @ {game['home_team']}"
     hr_threats = []
@@ -976,6 +987,17 @@ def api_hr_threats():
 @login_required
 def api_plays_of_day():
     return jsonify(get_plays_of_day_snapshot())
+
+
+@app.route("/api/odds/usage", methods=["GET"])
+@login_required
+def api_odds_usage():
+    """Return The Odds API quota usage so we can track free-tier consumption."""
+    from src import live_odds
+    return jsonify({
+        "enabled": live_odds.is_enabled(),
+        "usage": live_odds.get_usage(),
+    })
 
 
 @app.route("/api/nrfi", methods=["GET"])
