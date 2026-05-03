@@ -266,3 +266,57 @@ def attach_game_edges(spread_lean: dict, game: dict, odds_list: list) -> dict:
         spread_lean["rl_ev_pct"] = ev_pct(model_p, rl_best["american"])
 
     return spread_lean
+
+
+def attach_total_edge(total_lean: dict, game: dict, odds_list: list) -> dict:
+    """Add live book over/under price + edge to total_lean."""
+    if not total_lean or not odds_list:
+        return total_lean
+    g = find_game(odds_list, game.get("home_team"), game.get("away_team"))
+    if not g:
+        return total_lean
+
+    over_best = best_total(g, "Over")
+    under_best = best_total(g, "Under")
+    if not over_best or not under_best:
+        return total_lean
+
+    book_line = over_best["point"]
+    projected = float(total_lean.get("projected_runs", 0) or 0)
+
+    import math
+    sigma = 0.45 * math.sqrt(max(1.0, projected))
+    z = (projected - book_line) / sigma if sigma > 0 else 0
+    p_over = 0.5 * (1 + math.erf(z / math.sqrt(2)))
+    p_over = max(0.05, min(0.95, p_over))
+    p_under = 1.0 - p_over
+
+    total_lean["book_line"] = book_line
+    total_lean["over_book"] = over_best["book"]
+    total_lean["over_odds"] = over_best["american"]
+    total_lean["under_book"] = under_best["book"]
+    total_lean["under_odds"] = under_best["american"]
+    total_lean["model_p_over"] = round(p_over * 100, 1)
+    total_lean["over_edge_pct"] = edge_pct(p_over, over_best["american"])
+    total_lean["under_edge_pct"] = edge_pct(p_under, under_best["american"])
+    total_lean["over_ev_pct"] = ev_pct(p_over, over_best["american"])
+    total_lean["under_ev_pct"] = ev_pct(p_under, under_best["american"])
+
+    if p_over > p_under:
+        total_lean["pick"] = f"OVER {book_line}"
+        total_lean["pick_side"] = "OVER"
+        total_lean["pick_book"] = over_best["book"]
+        total_lean["pick_odds"] = over_best["american"]
+        total_lean["pick_edge_pct"] = total_lean["over_edge_pct"]
+        total_lean["pick_ev_pct"] = total_lean["over_ev_pct"]
+        total_lean["probability"] = round(p_over * 100, 1)
+    else:
+        total_lean["pick"] = f"UNDER {book_line}"
+        total_lean["pick_side"] = "UNDER"
+        total_lean["pick_book"] = under_best["book"]
+        total_lean["pick_odds"] = under_best["american"]
+        total_lean["pick_edge_pct"] = total_lean["under_edge_pct"]
+        total_lean["pick_ev_pct"] = total_lean["under_ev_pct"]
+        total_lean["probability"] = round(p_under * 100, 1)
+
+    return total_lean

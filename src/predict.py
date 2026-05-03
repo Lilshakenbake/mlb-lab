@@ -1025,6 +1025,113 @@ def build_spread_lean(game, home_team_score, away_team_score, home_pitcher_profi
         "note": weather_note,
     }
 
+def build_total_lean(game, home_team_score, away_team_score,
+                     home_pitcher_profile, away_pitcher_profile,
+                     weather, park_name=None):
+    """Project total runs scored in the full game and pick Over/Under.
+
+    Inputs:
+      home/away_team_score: offensive index already computed in app.py from
+        all hitters' projected hits + TB (NOT actual runs — needs scaling).
+      pitcher profiles: hits_allowed_avg, strikeouts_avg per recent start.
+
+    Returns dict with projected_runs, pick (OVER/UNDER), confidence, why.
+    Edge vs the actual book line is added later by attach_game_edges().
+    """
+    if not home_pitcher_profile or not away_pitcher_profile:
+        return None
+
+    # Convert team offensive index → projected runs.
+    # Hitter loop adds hits*0.8 + tb*1.0 per hitter; ~9 hitters/lineup means
+    # the total index runs ~12-22. Empirically a divisor of ~3.4 maps that
+    # to MLB-typical 3.5-5.5 runs per team. Cross-validate against book lines.
+    home_runs_proj = max(2.0, home_team_score / 3.4)
+    away_runs_proj = max(2.0, away_team_score / 3.4)
+
+    # Pitcher quality adjustment: strong starters suppress runs; weak ones
+    # inflate. Each strikeout/game above 6.0 trims ~0.08 runs allowed; each
+    # hit/game above 8.0 adds ~0.1 runs allowed.
+    def _pitcher_adj(profile):
+        k = float(profile.get("strikeouts_avg") or 6.0)
+        h = float(profile.get("hits_allowed_avg") or 8.0)
+        adj = 0.0
+        adj -= (k - 6.0) * 0.08
+        adj += (h - 8.0) * 0.10
+        return adj
+
+    home_runs_proj += _pitcher_adj(away_pitcher_profile)  # home faces away P
+    away_runs_proj += _pitcher_adj(home_pitcher_profile)  # away faces home P
+
+    # Park factor — runs proxy = hits factor.
+    park_runs_factor = 1.0
+    if park_name:
+        park_runs_factor = float(_get_park_factor(park_name).get("hits", 1.0))
+
+    why_bits = []
+    if abs(park_runs_factor - 1.0) >= 0.03:
+        why_bits.append(f"park {(park_runs_factor-1)*100:+.0f}%")
+
+    # Weather: temp + wind. Hot air carries, cold air kills offense.
+    weather_factor = 1.0
+    if weather and not weather.get("is_indoor"):
+        try:
+            temp = float(weather.get("temperature", 70) or 70)
+            wind = float(weather.get("wind_speed", 0) or 0)
+            wind_dir = float(weather.get("wind_dir_factor", 0) or 0)
+            if temp >= 82:
+                weather_factor *= 1.05
+                why_bits.append(f"hot {int(temp)}°")
+            elif temp <= 52:
+                weather_factor *= 0.93
+                why_bits.append(f"cold {int(temp)}°")
+            if wind >= 12 and wind_dir > 0:
+                weather_factor *= 1.06
+                why_bits.append(f"wind out {int(wind)}mph")
+            elif wind >= 12 and wind_dir < 0:
+                weather_factor *= 0.94
+                why_bits.append(f"wind in {int(wind)}mph")
+        except Exception:
+            pass
+    elif weather and weather.get("is_indoor"):
+        why_bits.append("indoor")
+
+    projected_runs = (home_runs_proj + away_runs_proj) * park_runs_factor * weather_factor
+    projected_runs = round(max(4.5, min(15.0, projected_runs)), 1)
+
+    # Without a book line yet, default Over/Under decision uses league avg ~8.5.
+    league_avg_total = 8.5
+    if projected_runs >= league_avg_total + 0.6:
+        pick = "OVER"
+        edge_runs = projected_runs - league_avg_total
+    elif projected_runs <= league_avg_total - 0.6:
+        pick = "UNDER"
+        edge_runs = league_avg_total - projected_runs
+    else:
+        pick = "LEAN"
+        edge_runs = abs(projected_runs - league_avg_total)
+
+    confidence = "LOW"
+    if edge_runs >= 1.2:
+        confidence = "HIGH"
+    elif edge_runs >= 0.7:
+        confidence = "MED"
+
+    why = (
+        f"Home ~{round(home_runs_proj,1)} R · "
+        f"Away ~{round(away_runs_proj,1)} R"
+    )
+    if why_bits:
+        why += " · " + ", ".join(why_bits)
+
+    return {
+        "pick": pick,
+        "projected_runs": projected_runs,
+        "league_baseline": league_avg_total,
+        "confidence": confidence,
+        "why": why,
+    }
+
+
 def compute_nrfi(game, home_pitcher_profile, away_pitcher_profile, weather, park_name=None):
     """Compute No-Runs-First-Inning probability for a game.
 

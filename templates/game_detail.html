@@ -324,6 +324,43 @@
                 </div>
             </div>
 
+            {% if total_lean %}
+            <h2>Game Total (Over / Under)</h2>
+            <p class="section-note">Projected total runs vs the book's posted line</p>
+            <div class="games-grid">
+                <div class="card"{% if total_lean.pick_edge_pct and total_lean.pick_edge_pct >= 5 %} style="border-left:4px solid #34d399;"{% elif total_lean.pick_edge_pct and total_lean.pick_edge_pct <= -3 %} style="border-left:4px solid #fb7185;"{% endif %}>
+                    <div class="matchup">{{ total_lean.pick }}</div>
+                    <div class="detail"><strong>Projected Runs:</strong> {{ total_lean.projected_runs }}</div>
+                    {% if total_lean.book_line is defined and total_lean.book_line is not none %}
+                      <div class="detail"><strong>Book Line:</strong> {{ total_lean.book_line }}</div>
+                    {% else %}
+                      <div class="detail"><strong>League Baseline:</strong> {{ total_lean.league_baseline }}</div>
+                    {% endif %}
+                    {% if total_lean.probability is defined %}
+                      <div class="detail"><strong>Win Probability:</strong> {{ total_lean.probability }}%</div>
+                    {% endif %}
+                    <div class="detail"><strong>Confidence:</strong> {{ total_lean.confidence }}</div>
+                    {% if total_lean.pick_book %}
+                    <div class="detail" style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(148,163,184,.2);">
+                        <strong>{{ total_lean.pick_book }}:</strong>
+                        {{ '+' ~ total_lean.pick_odds if total_lean.pick_odds > 0 else total_lean.pick_odds }}
+                        {% if total_lean.pick_edge_pct is not none %}
+                          · <span style="color:{% if total_lean.pick_edge_pct >= 5 %}#34d399{% elif total_lean.pick_edge_pct >= 0 %}#fbbf24{% else %}#fb7185{% endif %}; font-weight:700;">
+                              Edge: {{ '+' if total_lean.pick_edge_pct >= 0 else '' }}{{ total_lean.pick_edge_pct }}pp
+                          </span>
+                          {% if total_lean.pick_ev_pct is not none %}
+                            <span style="color:#94a3b8; font-size:11px;">(EV {{ '+' if total_lean.pick_ev_pct >= 0 else '' }}{{ total_lean.pick_ev_pct }}%)</span>
+                          {% endif %}
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    <div class="status">{{ total_lean.why }}</div>
+                    {{ ai_pill(total_lean.ai_review) }}
+                </div>
+            </div>
+            <hr>
+            {% endif %}
+
             <hr>
 
             <h2>Top Hits</h2>

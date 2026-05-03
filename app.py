@@ -19,6 +19,7 @@ from src.predict import (
     build_hitter_prop,
     build_pitcher_k_prop,
     build_spread_lean,
+    build_total_lean,
     compute_hr_threat,
     compute_nrfi,
     build_hrr_combo,
@@ -303,6 +304,16 @@ def build_game_boards(game):
         weather=weather,
     )
 
+    total_lean = build_total_lean(
+        game=game,
+        home_team_score=home_team_score,
+        away_team_score=away_team_score,
+        home_pitcher_profile=home_pitcher_profile,
+        away_pitcher_profile=away_pitcher_profile,
+        weather=weather,
+        park_name=park_name,
+    )
+
     # ── Live sportsbook edge: compare our model vs DraftKings/FanDuel/etc ──
     # Skipped silently if no API key or fetch fails (graceful degradation).
     try:
@@ -311,6 +322,8 @@ def build_game_boards(game):
             odds_list = live_odds.fetch_game_odds()
             if odds_list:
                 live_odds.attach_game_edges(spread_lean, game, odds_list)
+                if total_lean:
+                    live_odds.attach_total_edge(total_lean, game, odds_list)
     except Exception as e:
         print(f"[live-odds] attach failed: {e}")
 
@@ -378,6 +391,7 @@ def build_game_boards(game):
         "top_rbis": sorted(top_rbis, key=lambda x: x["probability"], reverse=True),
         "top_strikeouts": sorted(top_strikeouts, key=lambda x: x["probability"], reverse=True),
         "spread_lean": spread_lean,
+        "total_lean": total_lean,
         "weather": weather,
         "lineup_confirmed": lineup_confirmed,
         "projected_mode": projected_mode,
@@ -1328,6 +1342,7 @@ def game_detail(game_pk):
         top_strikeouts=sorted_k,
         hrr_combo=sorted_hrr,
         spread_lean=boards["spread_lean"],
+        total_lean=boards.get("total_lean"),
         weather=boards["weather"],
         lineup_confirmed=boards["lineup_confirmed"],
         projected_mode=boards["projected_mode"],
