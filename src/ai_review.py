@@ -208,5 +208,111 @@ def attach_reviews(picks: Iterable[dict], reviews: dict[str, dict]) -> list[dict
     return out
 
 
+def grade_parlay(legs: list[dict]) -> dict:
+    """Grade a user-built parlay (any mix of stat types).
+
+    Each leg dict may contain: player, stat, pick (OVER/UNDER), line, probability,
+    matchup. Returns:
+      {
+        ok: True/False,
+        model_prob: naive joint prob (legs multiplied, ignores correlation),
+        adjusted_prob: AI's adjusted estimate,
+        grade: "A+"|"A"|"B"|"C"|"D"|"F",
+        verdict: "SMASH"|"PLAY"|"LEAN"|"PASS"|"FADE",
+        confidence: HIGH|MED|LOW,
+        summary: short overall take,
+        leg_notes: [{i, note}],
+        risks: [str],
+        suggestions: [str],
+      }
+    """
+    if not legs:
+        return {"ok": False, "error": "No legs provided"}
+    client = _get_client()
+    if client is None:
+        return {"ok": False, "error": "AI unavailable (no key or disabled)"}
+    if not _under_daily_cap():
+        return {"ok": False, "error": f"Daily cap of {_DAILY_CAP} hit"}
+
+    # Naive joint probability — treat legs as independent.
+    naive = 1.0
+    for L in legs:
+        try:
+            p = float(L.get("probability") or 0) / 100.0
+            if 0 < p <= 1:
+                naive *= p
+        except Exception:
+            pass
+    naive_pct = round(naive * 100, 2)
+
+    summary = "\n".join(
+        f"{i+1}. {L.get('player','?')} | {L.get('stat','?')} {L.get('pick','OVER')} "
+        f"{L.get('line','')} | model prob {L.get('probability','?')}% | "
+        f"{L.get('matchup','')}"
+        for i, L in enumerate(legs)
+    )
+
+    prompt = (
+        "You are a sharp NEUTRAL MLB betting analyst grading a user-built parlay. "
+        "The user mixes any stat types (hits, total bases, home runs, RBIs, "
+        "strikeouts, H/R/RBI combos). The user's model gives each leg a "
+        f"probability. The naive joint probability (treating legs as independent) "
+        f"is {naive_pct}%, but real parlays have CORRELATION risk (same-game "
+        "legs can boost or hurt each other) and PARK/WEATHER/PITCHER overlap.\n\n"
+        f"PARLAY LEGS:\n{summary}\n\n"
+        "Grade this parlay honestly. Output JSON with EXACTLY these keys:\n"
+        '{\n'
+        '  "adjusted_prob": <number 0-100, your estimate accounting for correlation>,\n'
+        '  "grade": "A+|A|B|C|D|F",\n'
+        '  "verdict": "SMASH|PLAY|LEAN|PASS|FADE",\n'
+        '  "confidence": "HIGH|MED|LOW",\n'
+        '  "summary": "<one sentence overall take, <=25 words>",\n'
+        '  "leg_notes": [{"i":1, "note":"<short specific take, <=18 words>"}],\n'
+        '  "risks": ["<short risk #1>", "<short risk #2>"],\n'
+        '  "suggestions": ["<short improvement, e.g. swap leg 3 for safer prop>"]\n'
+        '}\n'
+        "Return one leg_note per leg. Be specific (cite park, weather, lineup, "
+        "pitcher matchup, correlation). Don't rubber-stamp high naive probs."
+    )
+
+    try:
+        _call_log.append(time.time())
+        resp = client.chat.completions.create(
+            model=_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+            max_tokens=1500,
+            timeout=_TIMEOUT,
+        )
+        raw = resp.choices[0].message.content or "{}"
+        parsed = json.loads(raw)
+        usage = getattr(resp, "usage", None)
+        if usage:
+            print(
+                f"[parlay-grade] ok — legs={len(legs)} naive={naive_pct}% "
+                f"in={getattr(usage,'prompt_tokens','?')} "
+                f"out={getattr(usage,'completion_tokens','?')} "
+                f"daily={len(_call_log)}/{_DAILY_CAP}"
+            )
+    except Exception as e:
+        print(f"[parlay-grade] failed: {e}")
+        return {"ok": False, "error": str(e)[:200]}
+
+    return {
+        "ok": True,
+        "model_prob": naive_pct,
+        "adjusted_prob": parsed.get("adjusted_prob"),
+        "grade": parsed.get("grade", "?"),
+        "verdict": parsed.get("verdict", "?"),
+        "confidence": parsed.get("confidence", "MED"),
+        "summary": str(parsed.get("summary", ""))[:400],
+        "leg_notes": parsed.get("leg_notes", []) or [],
+        "risks": parsed.get("risks", []) or [],
+        "suggestions": parsed.get("suggestions", []) or [],
+        "legs": legs,
+    }
+
+
 def is_enabled() -> bool:
     return _get_client() is not None

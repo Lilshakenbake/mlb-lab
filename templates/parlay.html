@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parlay Grader · MLB Lab</title>
+<style>
+    body { background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:0; }
+    .container { max-width:780px; margin:0 auto; padding:18px 14px 80px; }
+    h1 { font-size:22px; margin:6px 0 2px; }
+    .sub { color:#94a3b8; font-size:13px; margin:0 0 16px; }
+    .topnav { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:13px; }
+    .topnav a { color:#93c5fd; text-decoration:none; font-weight:600; }
+    .card { background:#1e293b; border:1px solid #334155; border-radius:10px; padding:12px; margin-bottom:10px; }
+    .leg-row { display:flex; gap:6px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+    .leg-row input, .leg-row select {
+        background:#0f172a; color:#e2e8f0; border:1px solid #334155;
+        border-radius:6px; padding:7px 8px; font-size:13px; flex:1; min-width:0;
+    }
+    .leg-row .player { flex:2; min-width:130px; }
+    .leg-row .stat { flex:1.4; min-width:100px; }
+    .leg-row .pick { width:78px; flex:0 0 78px; }
+    .leg-row .line, .leg-row .prob { width:62px; flex:0 0 62px; }
+    .leg-row .rm {
+        background:#4c0519; color:#fda4af; border:1px solid #7f1d1d;
+        border-radius:6px; width:30px; height:32px; cursor:pointer; font-weight:700;
+    }
+    .btn {
+        background:#1e40af; color:#fff; border:1px solid #3b82f6;
+        border-radius:8px; padding:10px 14px; font-weight:700; font-size:14px;
+        cursor:pointer; width:100%; margin-top:8px;
+    }
+    .btn:hover { background:#2547c4; }
+    .btn.secondary { background:#334155; border-color:#475569; }
+    .btn.secondary:hover { background:#3f4b60; }
+    .btn:disabled { opacity:0.5; cursor:not-allowed; }
+    .pill { display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:700; margin-right:6px; }
+    .grade-A\\+ { background:#064e3b; color:#6ee7b7; }
+    .grade-A   { background:#065f46; color:#a7f3d0; }
+    .grade-B   { background:#3f3f0d; color:#fde68a; }
+    .grade-C   { background:#451a03; color:#fdba74; }
+    .grade-D, .grade-F { background:#4c0519; color:#fda4af; }
+    .verdict-SMASH { background:#064e3b; color:#6ee7b7; }
+    .verdict-PLAY  { background:#065f46; color:#a7f3d0; }
+    .verdict-LEAN  { background:#3f3f0d; color:#fde68a; }
+    .verdict-PASS  { background:#451a03; color:#fdba74; }
+    .verdict-FADE  { background:#4c0519; color:#fda4af; }
+    .leg-note { font-size:12px; color:#cbd5e1; padding:6px 8px; border-left:3px solid #475569; margin:6px 0; background:#0f172a; border-radius:4px; }
+    .picker-row { display:flex; gap:6px; margin-bottom:6px; }
+    .picker-row select { flex:1; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:7px 8px; font-size:13px; }
+    .summary { font-size:14px; color:#e2e8f0; margin:8px 0; line-height:1.4; }
+    .stat-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0; }
+    .stat-box { background:#0f172a; padding:10px; border-radius:8px; text-align:center; border:1px solid #334155; }
+    .stat-box .label { font-size:10px; color:#94a3b8; letter-spacing:0.5px; }
+    .stat-box .val { font-size:20px; font-weight:700; margin-top:2px; }
+    ul.bullets { margin:4px 0 8px 18px; padding:0; font-size:13px; color:#cbd5e1; }
+    ul.bullets li { margin-bottom:3px; }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="topnav">
+        <a href="/">← Back to Slate</a>
+        <a href="/watchlist">Watchlist</a>
+    </div>
+
+    <h1>🎯 Parlay Grader</h1>
+    <p class="sub">Mix any props (hits, HR, TB, RBI, K, H/R/RBI). AI grades the parlay considering correlation, park, weather, and matchups.</p>
+
+    <div class="card">
+        <div style="font-weight:700; margin-bottom:8px;">Add legs from today's slate</div>
+        <div class="picker-row">
+            <select id="picker"><option value="">— Pick a play to add —</option></select>
+            <button class="btn secondary" style="width:auto; margin:0; padding:7px 12px;" onclick="addFromPicker()">+ Add</button>
+        </div>
+        <div style="font-size:11px; color:#64748b;">Or add a leg manually below.</div>
+    </div>
+
+    <div class="card">
+        <div style="font-weight:700; margin-bottom:8px;">Your parlay</div>
+        <div id="legs"></div>
+        <button class="btn secondary" onclick="addBlankLeg()">+ Add blank leg</button>
+        <button class="btn" id="grade-btn" onclick="gradeParlay()">🤖 Grade parlay with AI</button>
+        <div id="error" style="color:#fda4af; font-size:13px; margin-top:8px;"></div>
+    </div>
+
+    <div id="result" style="display:none;" class="card">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+            <span class="pill" id="grade-pill"></span>
+            <span class="pill" id="verdict-pill"></span>
+            <span style="font-size:11px; color:#94a3b8;" id="confidence-label"></span>
+        </div>
+        <div class="summary" id="summary"></div>
+        <div class="stat-grid">
+            <div class="stat-box"><div class="label">MODEL JOINT</div><div class="val" id="model-prob">—</div></div>
+            <div class="stat-box"><div class="label">AI ADJUSTED</div><div class="val" id="adj-prob">—</div></div>
+        </div>
+        <div style="font-weight:700; font-size:13px; margin-top:10px;">Per-leg notes</div>
+        <div id="leg-notes"></div>
+        <div style="font-weight:700; font-size:13px; margin-top:10px;">⚠️ Risks</div>
+        <ul class="bullets" id="risks"></ul>
+        <div style="font-weight:700; font-size:13px;">💡 Suggestions</div>
+        <ul class="bullets" id="suggestions"></ul>
+    </div>
+</div>
+
+<script>
+const STAT_OPTIONS = ["Hits","Home Runs","Total Bases","RBIs","Strikeouts","1+ H/R/RBI","Runs","Stolen Bases"];
+let legs = [];
+let slatePicks = [];
+
+const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+function renderLegs() {
+    const wrap = document.getElementById("legs");
+    if (legs.length === 0) {
+        wrap.innerHTML = '<div style="color:#64748b; font-size:13px; padding:8px 0;">No legs yet — add from picker above or click "+ Add blank leg".</div>';
+        return;
+    }
+    wrap.innerHTML = legs.map((L, i) => `
+        <div class="leg-row">
+            <input class="player" type="text" placeholder="Player" value="${esc(L.player)}"
+                   oninput="updateLeg(${i},'player',this.value)">
+            <select class="stat" onchange="updateLeg(${i},'stat',this.value)">
+                ${STAT_OPTIONS.map(s => `<option ${s===L.stat?'selected':''}>${s}</option>`).join("")}
+            </select>
+            <select class="pick" onchange="updateLeg(${i},'pick',this.value)">
+                <option ${L.pick==='OVER'?'selected':''}>OVER</option>
+                <option ${L.pick==='UNDER'?'selected':''}>UNDER</option>
+            </select>
+            <input class="line" type="number" step="0.5" placeholder="Line" value="${L.line ?? ''}"
+                   oninput="updateLeg(${i},'line',this.value)">
+            <input class="prob" type="number" step="0.1" placeholder="Prob%" value="${L.probability ?? ''}"
+                   oninput="updateLeg(${i},'probability',this.value)">
+            <button class="rm" onclick="removeLeg(${i})">✕</button>
+        </div>
+        ${L.matchup ? `<div style="font-size:10px; color:#64748b; margin:-4px 0 6px 4px;">${esc(L.matchup)}</div>` : ''}
+    `).join("");
+}
+
+function updateLeg(i, field, val) {
+    if (field === 'line' || field === 'probability') {
+        legs[i][field] = val === '' ? null : Number(val);
+    } else {
+        legs[i][field] = val;
+    }
+}
+
+function removeLeg(i) {
+    legs.splice(i, 1);
+    renderLegs();
+}
+
+function addBlankLeg() {
+    legs.push({ player:"", stat:"Hits", pick:"OVER", line:0.5, probability:null, matchup:"" });
+    renderLegs();
+}
+
+function addFromPicker() {
+    const sel = document.getElementById("picker");
+    const idx = parseInt(sel.value, 10);
+    if (isNaN(idx) || !slatePicks[idx]) return;
+    legs.push({ ...slatePicks[idx] });
+    renderLegs();
+    sel.value = "";
+}
+
+async function loadSlatePicks() {
+    try {
+        const resp = await fetch("/api/parlay/picks", { credentials:"same-origin" });
+        const data = await resp.json();
+        slatePicks = data.picks || [];
+        const sel = document.getElementById("picker");
+        // Sort by probability desc.
+        const sorted = slatePicks.map((p,i)=>({p,i})).sort((a,b)=>(b.p.probability||0)-(a.p.probability||0));
+        sel.innerHTML = '<option value="">— Pick a play to add —</option>' +
+            sorted.map(({p,i}) =>
+                `<option value="${i}">${esc(p.player)} · ${esc(p.stat)} ${esc(p.pick||"")} ${p.line ?? ""} · ${p.probability}%</option>`
+            ).join("");
+    } catch(e) {
+        console.error("picks load failed", e);
+    }
+}
+
+async function gradeParlay() {
+    const btn = document.getElementById("grade-btn");
+    const err = document.getElementById("error");
+    err.textContent = "";
+    if (legs.length === 0) { err.textContent = "Add at least 1 leg."; return; }
+    if (legs.length > 12) { err.textContent = "Max 12 legs."; return; }
+    btn.disabled = true; btn.textContent = "🤖 Grading…";
+    try {
+        const resp = await fetch("/api/parlay/grade", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            credentials:"same-origin",
+            body: JSON.stringify({ legs })
+        });
+        const data = await resp.json();
+        if (!data.ok) {
+            err.textContent = data.error || "Grade failed.";
+            return;
+        }
+        renderResult(data);
+    } catch(e) {
+        err.textContent = "Network error: " + e.message;
+    } finally {
+        btn.disabled = false; btn.textContent = "🤖 Grade parlay with AI";
+    }
+}
+
+function renderResult(d) {
+    const box = document.getElementById("result");
+    const gp = document.getElementById("grade-pill");
+    const vp = document.getElementById("verdict-pill");
+    const grade = String(d.grade || "?").trim();
+    const verdict = String(d.verdict || "?").trim();
+    gp.textContent = "Grade: " + grade;
+    gp.className = "pill grade-" + grade;
+    vp.textContent = verdict;
+    vp.className = "pill verdict-" + verdict;
+    document.getElementById("confidence-label").textContent = "AI confidence: " + (d.confidence || "?");
+    document.getElementById("summary").textContent = d.summary || "";
+    document.getElementById("model-prob").textContent = (d.model_prob ?? "—") + "%";
+    document.getElementById("adj-prob").textContent = (d.adjusted_prob ?? "—") + "%";
+
+    const notes = document.getElementById("leg-notes");
+    notes.innerHTML = (d.leg_notes || []).map(n => {
+        const i = parseInt(n.i, 10);
+        const L = legs[i-1];
+        const head = L ? `${esc(L.player)} · ${esc(L.stat)} ${esc(L.pick||"")} ${L.line ?? ""}` : `Leg ${n.i}`;
+        return `<div class="leg-note"><strong>#${n.i}</strong> ${head}<br>${esc(n.note || "")}</div>`;
+    }).join("") || '<div style="color:#64748b; font-size:12px;">No per-leg notes.</div>';
+
+    document.getElementById("risks").innerHTML =
+        (d.risks||[]).map(r => `<li>${esc(r)}</li>`).join("") || '<li style="color:#64748b;">No notable risks called out.</li>';
+    document.getElementById("suggestions").innerHTML =
+        (d.suggestions||[]).map(s => `<li>${esc(s)}</li>`).join("") || '<li style="color:#64748b;">No specific suggestions.</li>';
+
+    box.style.display = "block";
+    box.scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+renderLegs();
+loadSlatePicks();
+</script>
+</body>
+</html>

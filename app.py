@@ -1068,6 +1068,83 @@ def api_grade():
     return jsonify(state)
 
 
+@app.route("/parlay", methods=["GET"])
+@login_required
+def parlay_page():
+    return render_template("parlay.html")
+
+
+@app.route("/api/parlay/grade", methods=["POST"])
+@login_required
+def api_parlay_grade():
+    """Grade a user-built parlay with AI. Body: {"legs": [...]}."""
+    payload = request.get_json(silent=True) or {}
+    legs = payload.get("legs") or []
+    if not isinstance(legs, list) or not legs:
+        return jsonify({"ok": False, "error": "Provide at least 1 leg"}), 400
+    if len(legs) > 12:
+        return jsonify({"ok": False, "error": "Max 12 legs"}), 400
+    # Sanitize legs to safe primitive fields only.
+    clean = []
+    for L in legs:
+        if not isinstance(L, dict):
+            continue
+        clean.append({
+            "player": str(L.get("player", ""))[:80],
+            "stat": str(L.get("stat", ""))[:40],
+            "pick": str(L.get("pick", "OVER"))[:10],
+            "line": L.get("line"),
+            "probability": L.get("probability"),
+            "matchup": str(L.get("matchup", ""))[:80],
+        })
+    result = ai_review.grade_parlay(clean)
+    return jsonify(result)
+
+
+@app.route("/api/parlay/picks", methods=["GET"])
+@login_required
+def api_parlay_picks():
+    """Returns the current slate's picks formatted for the parlay leg picker."""
+    out = []
+    with _PLAYS_LOCK:
+        for p in PLAYS_CACHE["data"]:
+            if p.get("pick") == "PASS":
+                continue
+            out.append({
+                "player": p.get("headline"),
+                "stat": p.get("stat_label"),
+                "pick": p.get("pick"),
+                "line": p.get("line"),
+                "probability": p.get("probability"),
+                "matchup": p.get("matchup"),
+                "edge": p.get("edge"),
+                "game_pk": p.get("game_pk"),
+            })
+        for h in HR_THREATS_CACHE["data"]:
+            out.append({
+                "player": h.get("player"),
+                "stat": "Home Run",
+                "pick": "OVER",
+                "line": 0.5,
+                "probability": h.get("probability"),
+                "matchup": h.get("matchup"),
+                "edge": None,
+                "game_pk": h.get("game_pk"),
+            })
+        for c in HRR_COMBO_CACHE["data"]:
+            out.append({
+                "player": c.get("headline") or c.get("player"),
+                "stat": "1+ H/R/RBI",
+                "pick": "OVER",
+                "line": 0.5,
+                "probability": c.get("probability"),
+                "matchup": c.get("matchup"),
+                "edge": c.get("edge"),
+                "game_pk": c.get("game_pk"),
+            })
+    return jsonify({"picks": out})
+
+
 @app.route("/api/odds/<int:play_id>", methods=["POST"])
 @login_required
 def api_odds(play_id):
