@@ -275,7 +275,17 @@ def _xstat_blend(stat_type, base_projection, hitter_profile):
         # League avg contact ~0.62 (BIP per PA). Each 5pp = ~3% Hits shift.
         contact_mult = 1.0 + min(max((float(contact) - 0.62) * 0.6, -0.10), 0.10) if contact is not None else 1.0
         if x is not None:
-            return (0.6 * base_projection + 0.4 * float(x)) * contact_mult
+            # Luck regression: when raw hits and xHits diverge by >25%, the
+            # hitter is running hot/cold on BABIP. Push the xHits weight up
+            # to reflect the regression that's coming. Standard blend is
+            # 60/40 (raw/x); when |gap| is big we shift toward 40/60.
+            raw = float(base_projection)
+            xv = float(x)
+            if raw > 0:
+                gap = abs(xv - raw) / raw
+                if gap >= 0.25:
+                    return (0.4 * raw + 0.6 * xv) * contact_mult
+            return (0.6 * raw + 0.4 * xv) * contact_mult
         return base_projection * contact_mult
 
     elif stat_type == "total_bases":
@@ -711,6 +721,17 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     )
     hot_f = _hot_factor((hitter_profile or {}).get("hot_ratio"))
 
+    # ── Team defense factor: opp D suppresses hits + extra-base contact ──
+    # Doesn't affect HR (over-the-wall) or RBIs (driven by HR + opportunity).
+    def_f = 1.0
+    def_note = None
+    if opp_team and stat_type in ("hits", "total_bases"):
+        from src.defense_factors import get_defense_factor
+        def_key = "hits" if stat_type == "hits" else "tb"
+        def_f = get_defense_factor(opp_team).get(def_key, 1.0)
+        if abs(def_f - 1.0) >= 0.025:
+            def_note = f"opp D {(def_f - 1)*100:+.0f}%"
+
     # ── Bullpen factor: 30-40% of late ABs are vs the opposing pen ──
     # Hard cap the impact since the starter still owns most innings.
     pen_f = 1.0
@@ -765,7 +786,7 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
             delta = pull_c - cf_c  # additional pull-side wind beyond CF
             pull_wind_bonus = delta * 0.010
 
-    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * power_f * pen_f * fb_f)
+    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * power_f * pen_f * fb_f * def_f)
 
     # Anti double-count: the K damper and the additive pitcher_adjustment both
     # encode pitcher quality. When the K damper has already pulled the projection
@@ -791,6 +812,8 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         factor_bits.append(f"opp pwr {power_f - 1:+.0%}")
     if abs(fb_f - 1.0) >= 0.04 and fb_note_pp:
         factor_bits.append(fb_note_pp)
+    if def_note:
+        factor_bits.append(def_note)
     if pen_note:
         factor_bits.append(pen_note)
     if xstat_used:
@@ -1139,6 +1162,7 @@ def build_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_idx
     hot_f = _hot_factor((hitter_profile or {}).get("hot_ratio"))
 
     pen_f = 1.0
+    def_f = 1.0
     if opp_team:
         try:
             from src.bullpen_factors import get_bullpen_factor
@@ -1146,6 +1170,11 @@ def build_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_idx
             pen_f = 1.0 + (raw_pen - 1.0) * 0.30
         except Exception:
             pen_f = 1.0
+        try:
+            from src.defense_factors import get_defense_factor
+            def_f = get_defense_factor(opp_team).get("hits", 1.0)
+        except Exception:
+            def_f = 1.0
 
     # Weather: warm + helpful wind nudges total offensive output up.
     weather_boost = 0.0
@@ -1160,7 +1189,7 @@ def build_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_idx
         except Exception:
             pass
 
-    context = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * pen_f)
+    context = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * pen_f * def_f)
 
     # Per-stat Poisson rates; weather boost split across the three components.
     lam_h   = max(0.01, hits_avg * context + weather_boost * 0.55)
