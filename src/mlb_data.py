@@ -561,6 +561,23 @@ def get_last5_pitcher_profile(pitcher_name):
                         sum(1 for r in runs_per_start if r == 0) / len(runs_per_start), 3
                     )
 
+        # ── Fastball usage + velocity (HR-prone arms throw a lot of slow heat) ─
+        fb_pct = None
+        fb_velo = None
+        if "pitch_type" in df.columns:
+            pt = df["pitch_type"].dropna().astype(str)
+            if len(pt) >= 50:
+                # FF=4-seam, SI=sinker, FC=cutter, FT=2-seam — all "fastballs".
+                fb_mask_full = df["pitch_type"].astype(str).isin(["FF", "SI", "FC", "FT"])
+                fb_pct = round(float(fb_mask_full.mean()), 3)
+                if "release_speed" in df.columns:
+                    rs = pd.to_numeric(
+                        df.loc[fb_mask_full, "release_speed"],
+                        errors="coerce",
+                    ).dropna()
+                    if len(rs) >= 30:
+                        fb_velo = round(float(rs.mean()), 1)
+
         # ── Handedness splits — pitcher's performance vs L vs R hitters ───
         pitcher_splits = {"vs_L": {}, "vs_R": {}}
         if "stand" in df.columns:
@@ -595,6 +612,8 @@ def get_last5_pitcher_profile(pitcher_name):
             "first_inning_runs_avg": first_inning_runs_avg,
             "nrfi_solo_rate": nrfi_solo_rate,
             "splits": pitcher_splits,
+            "fb_pct": fb_pct,
+            "fb_velo": fb_velo,
         }
 
         PitcherProfileCache[pitcher_name] = profile

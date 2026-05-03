@@ -50,6 +50,51 @@ def _wind_out_component(park_name, wind_dir_deg, wind_speed_mph):
     return math.cos(math.radians(diff)) * float(wind_speed_mph)
 
 
+def _wind_pull_component(park_name, wind_dir_deg, wind_speed_mph, batter_hand):
+    """Wind component blowing OUT to the batter's pull-side gap.
+    RHB pulls to LF (~35° left of CF), LHB pulls to RF (~35° right).
+    Switch hitters / unknown handedness fall back to plain CF wind.
+    Positive = wind helping a pull-side fly carry out."""
+    if not park_name or wind_speed_mph is None or wind_dir_deg is None:
+        return None
+    bearing = PARK_ORIENTATIONS.get(park_name)
+    if bearing is None or not batter_hand:
+        return None
+    h = str(batter_hand).upper()
+    if h == "R":
+        target = (bearing - 35.0) % 360.0
+    elif h == "L":
+        target = (bearing + 35.0) % 360.0
+    else:
+        return None
+    blowing_to = (float(wind_dir_deg) + 180.0) % 360.0
+    diff = abs(((blowing_to - target) + 540.0) % 360.0 - 180.0)
+    return math.cos(math.radians(diff)) * float(wind_speed_mph)
+
+
+def _pitcher_fastball_hr_factor(fb_pct, fb_velo):
+    """HR multiplier from opponent pitcher's fastball usage + velocity.
+    More fastballs over the heart at slower velo = more HRs.
+    League avg ~55% FB usage at ~93.5mph. Capped ±15%."""
+    if fb_pct is None and fb_velo is None:
+        return 1.0, None
+    factor = 1.0
+    if fb_pct is not None:
+        factor += (float(fb_pct) - 0.55) * 0.6
+    if fb_velo is not None:
+        factor += (93.5 - float(fb_velo)) * 0.025
+    factor = max(0.85, min(1.15, factor))
+    note = None
+    if abs(factor - 1.0) >= 0.05:
+        bits = []
+        if fb_pct is not None:
+            bits.append(f"FB {float(fb_pct)*100:.0f}%")
+        if fb_velo is not None:
+            bits.append(f"{float(fb_velo):.1f}mph")
+        note = "opp " + " ".join(bits)
+    return factor, note
+
+
 def _prob_to_american(prob):
     """Convert a probability (0-1) to a fair American odds string like '+450' or '-180'."""
     p = max(0.01, min(0.99, float(prob)))
@@ -138,20 +183,33 @@ def compute_hr_threat(hitter_name, hitter_profile, opp_pitcher_name,
     elif spot in (1, 2):
         expected *= 1.04
 
-    # Wind out to CF.
+    # ── Pitcher fastball mix — soft heat over the heart = HR magnet ───
+    fb_factor, fb_note = _pitcher_fastball_hr_factor(opp.get("fb_pct"), opp.get("fb_velo"))
+    expected *= fb_factor
+
+    # Wind — prefer the batter's pull-side gap (where most HRs leave).
+    # Falls back to plain CF wind when handedness is unknown.
     wind_note = None
     temp_note = None
     if weather and not weather.get("is_indoor"):
-        out_comp = _wind_out_component(
-            park_name,
-            weather.get("wind_direction"),
-            weather.get("wind_speed"),
-        )
-        if out_comp is not None and abs(out_comp) >= 4:
-            expected += out_comp * 0.012
-            if abs(out_comp) >= 8:
-                direction = "out to CF" if out_comp > 0 else "in from CF"
-                wind_note = f"Wind {abs(out_comp):.0f}mph {direction}"
+        wind_speed = weather.get("wind_speed")
+        wind_dir = weather.get("wind_direction")
+        pull_comp = _wind_pull_component(park_name, wind_dir, wind_speed,
+                                         hitter_profile.get("hand"))
+        out_comp = _wind_out_component(park_name, wind_dir, wind_speed)
+        # Use pull-side if available; it's a stronger HR signal.
+        used = pull_comp if pull_comp is not None else out_comp
+        if used is not None and abs(used) >= 4:
+            # Pull-side wind has slightly higher coefficient than dead-CF wind
+            # because pulled fly balls are the HR carrier.
+            coef = 0.014 if pull_comp is not None else 0.012
+            expected += used * coef
+            if abs(used) >= 8:
+                if pull_comp is not None:
+                    direction = "to pull" if used > 0 else "in to pull"
+                else:
+                    direction = "out to CF" if used > 0 else "in from CF"
+                wind_note = f"Wind {abs(used):.0f}mph {direction}"
 
         # Temperature — hot air carries the ball further. Each 10°F over 70
         # adds ~1.5% to HR rate; each 10°F under 60 cuts ~2%.
@@ -180,6 +238,8 @@ def compute_hr_threat(hitter_name, hitter_profile, opp_pitcher_name,
         reasons.append(f"park {(park_hr_f - 1)*100:+.0f}%")
     if pitcher_note:
         reasons.append(pitcher_note)
+    if fb_note:
+        reasons.append(fb_note)
     if wind_note:
         reasons.append(wind_note)
     if temp_note:
@@ -668,6 +728,8 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     # ── Power-allowed factor for TB / HR (decouples from generic hits-allowed) ──
     # Tells you whether this pitcher gives up cheap singles or barreled missiles.
     power_f = 1.0
+    fb_f = 1.0
+    fb_note_pp = None
     if stat_type in ("total_bases", "home_runs"):
         opp = opp_pitcher_profile or {}
         hra = opp.get("hr_allowed_avg")
@@ -678,8 +740,32 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         if hha is not None:
             # League avg hard-hit ~38%. Each 5pp diff ≈ 4% TB shift.
             power_f *= 1.0 + min(max((float(hha) - 0.38) * 0.8, -0.10), 0.12)
+        # Pitcher fastball mix — apply to HR (and a softer share to TB).
+        raw_fb_f, fb_note_pp = _pitcher_fastball_hr_factor(opp.get("fb_pct"), opp.get("fb_velo"))
+        if stat_type == "home_runs":
+            fb_f = raw_fb_f
+        else:
+            # Dilute for TB (HRs are only part of TB).
+            fb_f = 1.0 + (raw_fb_f - 1.0) * 0.45
 
-    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * power_f * pen_f)
+    # Pull-side wind bonus for HRs — adds the *extra* edge of pull-side
+    # over plain CF, since CF wind is already reflected in weather_boost.
+    pull_wind_bonus = 0.0
+    if (stat_type == "home_runs" and weather and not weather.get("is_indoor")
+            and hitter_profile and hitter_profile.get("hand")):
+        pull_c = _wind_pull_component(
+            park_name, weather.get("wind_direction"),
+            weather.get("wind_speed"), hitter_profile.get("hand"),
+        )
+        cf_c = _wind_out_component(
+            park_name, weather.get("wind_direction"),
+            weather.get("wind_speed"),
+        )
+        if pull_c is not None and cf_c is not None:
+            delta = pull_c - cf_c  # additional pull-side wind beyond CF
+            pull_wind_bonus = delta * 0.010
+
+    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * power_f * pen_f * fb_f)
 
     # Anti double-count: the K damper and the additive pitcher_adjustment both
     # encode pitcher quality. When the K damper has already pulled the projection
@@ -689,7 +775,7 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         if same_dir:
             pitcher_adjustment *= 0.5
 
-    projection = (base_projection * context_factor) + lineup_boost + weather_boost + pitcher_adjustment
+    projection = (base_projection * context_factor) + lineup_boost + weather_boost + pitcher_adjustment + pull_wind_bonus
 
     # Build a short why-string so the user can see what moved this pick.
     factor_bits = []
@@ -703,6 +789,8 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         factor_bits.append(f"trend {hot_f - 1:+.0%}")
     if abs(power_f - 1.0) >= 0.04:
         factor_bits.append(f"opp pwr {power_f - 1:+.0%}")
+    if abs(fb_f - 1.0) >= 0.04 and fb_note_pp:
+        factor_bits.append(fb_note_pp)
     if pen_note:
         factor_bits.append(pen_note)
     if xstat_used:
