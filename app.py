@@ -724,6 +724,7 @@ def _run_ai_review_pass():
         hrr_snapshot = [copy.deepcopy(c) for c in HRR_COMBO_CACHE["data"]]
         hr_snapshot = [copy.deepcopy(h) for h in HR_THREATS_CACHE["data"]]
         plays_snapshot = [copy.deepcopy(p) for p in PLAYS_CACHE["data"]]
+        nrfi_snapshot = [copy.deepcopy(n) for n in NRFI_CACHE["data"]]
     # Tag categorical labels so _pick_key stays unique across boards and
     # the AI prompt clearly states what each pick is for.
     for h in hr_snapshot:
@@ -732,7 +733,11 @@ def _run_ai_review_pass():
     for c in hrr_snapshot:
         c.setdefault("stat_label", "1+ H/R/RBI")
         c.setdefault("pick", "OVER")
-    bundle = locks_snapshot + hrr_snapshot + hr_snapshot + plays_snapshot
+    for n in nrfi_snapshot:
+        # NRFI/YRFI: pick is already "NRFI" or "YRFI" from compute_nrfi.
+        # Tag stat_label so the AI knows it's a 1st-inning runs market.
+        n["stat_label"] = "NRFI/YRFI"
+    bundle = locks_snapshot + hrr_snapshot + hr_snapshot + plays_snapshot + nrfi_snapshot
     if not bundle:
         return
     reviews = ai_review.review_picks(bundle, kind="mlb-slate-all")
@@ -742,6 +747,7 @@ def _run_ai_review_pass():
     ai_review.attach_reviews(hrr_snapshot, reviews)
     ai_review.attach_reviews(hr_snapshot, reviews)
     ai_review.attach_reviews(plays_snapshot, reviews)
+    ai_review.attach_reviews(nrfi_snapshot, reviews)
     # Atomic publish — replace the list refs entirely so a reader holding
     # the old list never sees a dict get an `ai_review` key bolted on after
     # the fact.
@@ -750,6 +756,7 @@ def _run_ai_review_pass():
         HRR_COMBO_CACHE["data"] = hrr_snapshot
         HR_THREATS_CACHE["data"] = hr_snapshot
         PLAYS_CACHE["data"] = plays_snapshot
+        NRFI_CACHE["data"] = nrfi_snapshot
     print(f"[ai-review] attached {len(reviews)} verdicts across {len(bundle)} picks")
 
 

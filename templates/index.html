@@ -728,6 +728,7 @@ window.__aiPill = function (r) {
         const color = isNrfi ? "#34d399" : "#fb7185";
         const why = n.why ? `<div class="detail" style="font-size:11px; color:#94a3b8;">${escape(n.why)}</div>` : "";
         const fair = n.fair_odds ? `<div class="detail"><strong>Fair odds:</strong> ${escape(n.fair_odds)}</div>` : "";
+        const aiBit = window.__aiPill ? window.__aiPill(n.ai_review) : "";
         return `
             <div class="card play-card" style="border-left:4px solid ${color};">
               <a href="${link}" style="text-decoration:none; color:inherit;">
@@ -741,6 +742,7 @@ window.__aiPill = function (r) {
                   </div>
                   ${fair}
                   ${why}
+                  ${aiBit}
                 </div>
                 <div class="prob-big" style="color:${color};">${escape(n.probability)}%</div>
               </a>
