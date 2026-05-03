@@ -316,6 +316,7 @@ def build_game_boards(game):
 
     # ── Live sportsbook edge: compare our model vs DraftKings/FanDuel/etc ──
     # Skipped silently if no API key or fetch fails (graceful degradation).
+    event_id = None
     try:
         from src import live_odds
         if live_odds.is_enabled():
@@ -324,6 +325,10 @@ def build_game_boards(game):
                 live_odds.attach_game_edges(spread_lean, game, odds_list)
                 if total_lean:
                     live_odds.attach_total_edge(total_lean, game, odds_list)
+                # Capture event_id so we can fetch player props (lazy + cached).
+                g = live_odds.find_game(odds_list, game.get("home_team"), game.get("away_team"))
+                if g:
+                    event_id = g.get("id")
     except Exception as e:
         print(f"[live-odds] attach failed: {e}")
 
@@ -384,12 +389,33 @@ def build_game_boards(game):
             c["lineup_spot"] = idx + 1
             hrr_combo.append(c)
 
+    sorted_hits = sorted(top_hits, key=lambda x: x["probability"], reverse=True)
+    sorted_tb = sorted(top_total_bases, key=lambda x: x["probability"], reverse=True)
+    sorted_hr_props = sorted(top_home_runs, key=lambda x: x["probability"], reverse=True)
+    sorted_rbis = sorted(top_rbis, key=lambda x: x["probability"], reverse=True)
+    sorted_ks = sorted(top_strikeouts, key=lambda x: x["probability"], reverse=True)
+
+    # ── Player-prop edges: lazy fetch (12hr cache) when we have an event_id ──
+    # Skipped silently when API key missing, fetch fails, or PROP_ODDS_ENABLED=0.
+    if event_id and os.getenv("PROP_ODDS_ENABLED", "1") == "1":
+        try:
+            from src import live_odds as _lo
+            event_odds = _lo.fetch_player_props(event_id)
+            if event_odds:
+                _lo.attach_prop_edges(sorted_hits, event_odds, "hits")
+                _lo.attach_prop_edges(sorted_tb, event_odds, "total_bases")
+                _lo.attach_prop_edges(sorted_hr_props, event_odds, "home_runs")
+                _lo.attach_prop_edges(sorted_rbis, event_odds, "rbis")
+                _lo.attach_prop_edges(sorted_ks, event_odds, "strikeouts", player_field="pitcher")
+        except Exception as e:
+            print(f"[live-odds] prop attach failed: {e}")
+
     return {
-        "top_hits": sorted(top_hits, key=lambda x: x["probability"], reverse=True),
-        "top_total_bases": sorted(top_total_bases, key=lambda x: x["probability"], reverse=True),
-        "top_home_runs": sorted(top_home_runs, key=lambda x: x["probability"], reverse=True),
-        "top_rbis": sorted(top_rbis, key=lambda x: x["probability"], reverse=True),
-        "top_strikeouts": sorted(top_strikeouts, key=lambda x: x["probability"], reverse=True),
+        "top_hits": sorted_hits,
+        "top_total_bases": sorted_tb,
+        "top_home_runs": sorted_hr_props,
+        "top_rbis": sorted_rbis,
+        "top_strikeouts": sorted_ks,
         "spread_lean": spread_lean,
         "total_lean": total_lean,
         "weather": weather,

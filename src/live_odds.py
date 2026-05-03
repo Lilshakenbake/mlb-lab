@@ -26,7 +26,10 @@ BASE = "https://api.the-odds-api.com/v4"
 SPORT = "baseball_mlb"
 REGIONS = "us"
 GAME_MARKETS = "h2h,spreads,totals"
-GAME_TTL = 2 * 3600  # 2 hours
+# Player prop markets (each one is +1 quota unit per event request).
+PROP_MARKETS = "batter_hits,batter_home_runs,batter_total_bases,batter_rbis,pitcher_strikeouts"
+GAME_TTL = 2 * 3600       # 2 hours
+PROP_TTL = 12 * 3600      # 12 hours per game (controls quota burn)
 TIMEOUT = 10
 
 # Track last quota usage from response headers so we can show it in UI.
@@ -266,6 +269,130 @@ def attach_game_edges(spread_lean: dict, game: dict, odds_list: list) -> dict:
         spread_lean["rl_ev_pct"] = ev_pct(model_p, rl_best["american"])
 
     return spread_lean
+
+
+def fetch_player_props(event_id: str) -> Optional[dict]:
+    """Pull player-prop markets for a single game. 12hr disk cache per event.
+    Returns the raw event-odds payload (with bookmakers/markets) or None.
+
+    Quota cost: ~5 units per call (one per market). With 12hr TTL and a few
+    games viewed per day, this stays well under the 500/mo free tier."""
+    if not is_enabled() or not event_id:
+        return None
+    cached = _cache.get("live_odds_props", event_id, PROP_TTL)
+    if cached is not None:
+        return cached
+    url = f"{BASE}/sports/{SPORT}/events/{event_id}/odds"
+    params = {
+        "apiKey": API_KEY,
+        "regions": REGIONS,
+        "markets": PROP_MARKETS,
+        "oddsFormat": "american",
+        "dateFormat": "iso",
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=TIMEOUT)
+        try:
+            _USAGE["used"] = int(resp.headers.get("x-requests-used", 0))
+            _USAGE["remaining"] = int(resp.headers.get("x-requests-remaining", 0))
+            _USAGE["ts"] = time.time()
+        except (TypeError, ValueError):
+            pass
+        if resp.status_code != 200:
+            print(f"[live-odds] props HTTP {resp.status_code}: {resp.text[:200]}")
+            return None
+        data = resp.json()
+        _cache.put("live_odds_props", event_id, data)
+        return data
+    except Exception as e:
+        print(f"[live-odds] props fetch failed: {e}")
+        return None
+
+
+# Map our internal stat_type → Odds API market key.
+_PROP_MARKET_MAP = {
+    "hits": "batter_hits",
+    "total_bases": "batter_total_bases",
+    "home_runs": "batter_home_runs",
+    "rbis": "batter_rbis",
+    "strikeouts": "pitcher_strikeouts",
+}
+
+
+def _player_match(book_name: str, our_name: str) -> bool:
+    """Loose player-name match — handles 'J. Smith' vs 'John Smith' etc."""
+    if not book_name or not our_name:
+        return False
+    a = book_name.lower().strip()
+    b = our_name.lower().strip()
+    if a == b:
+        return True
+    # Last-name match if first names initial-only.
+    a_last = a.split()[-1]
+    b_last = b.split()[-1]
+    return a_last == b_last and a.split()[0][0] == b.split()[0][0]
+
+
+def best_player_prop(event_odds: dict, market_key: str, player_name: str,
+                     side: str) -> Optional[dict]:
+    """Best price for a player's Over/Under on a market. side='Over'|'Under'."""
+    if not event_odds:
+        return None
+    target = side.lower()
+    best = None
+    for bm in event_odds.get("bookmakers", []):
+        for mk in bm.get("markets", []):
+            if mk.get("key") != market_key:
+                continue
+            for o in mk.get("outcomes", []):
+                if not _player_match(o.get("description", ""), player_name):
+                    continue
+                if str(o.get("name", "")).lower() != target:
+                    continue
+                price = o.get("price")
+                point = o.get("point")
+                if price is None or point is None:
+                    continue
+                if best is None or price > best["american"]:
+                    best = {
+                        "book": bm.get("title", "?"),
+                        "american": int(price),
+                        "point": point,
+                        "prob": _american_to_prob(price),
+                    }
+    return best
+
+
+def attach_prop_edges(prop_list: list, event_odds: dict, stat_type: str,
+                      player_field: str = "player") -> int:
+    """Mutate each prop dict with book_line/book_odds/book/edge_pct/ev_pct
+    based on the side our model picks (OVER/UNDER). Returns count attached."""
+    if not prop_list or not event_odds:
+        return 0
+    market_key = _PROP_MARKET_MAP.get(stat_type)
+    if not market_key:
+        return 0
+    n = 0
+    for prop in prop_list:
+        side = (prop.get("pick") or "").upper()
+        if side not in ("OVER", "UNDER"):
+            continue
+        name = prop.get(player_field) or prop.get("pitcher")
+        if not name:
+            continue
+        side_norm = "Over" if side == "OVER" else "Under"
+        best = best_player_prop(event_odds, market_key, name, side_norm)
+        if not best:
+            continue
+        # Model probability is the prop's win % (already 0-100).
+        model_p = float(prop.get("probability", 50.0)) / 100.0
+        prop["book_line"] = best["point"]
+        prop["book_odds"] = best["american"]
+        prop["book"] = best["book"]
+        prop["prop_edge_pct"] = edge_pct(model_p, best["american"])
+        prop["prop_ev_pct"] = ev_pct(model_p, best["american"])
+        n += 1
+    return n
 
 
 def attach_total_edge(total_lean: dict, game: dict, odds_list: list) -> dict:
