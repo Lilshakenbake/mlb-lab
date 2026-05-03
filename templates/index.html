@@ -233,13 +233,31 @@
             color: #fff;
             border-color: #3b82f6;
         }
+        .parlay-btn {
+            margin-top: 6px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid #b45309;
+            background: #422006;
+            color: #fbbf24;
+            font-weight: bold;
+            font-size: 11px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .parlay-btn:hover { background: #5b2c0a; }
+        .parlay-btn.parlay-added {
+            background: #14532d;
+            color: #bbf7d0;
+            border-color: #22c55e;
+        }
     </style>
 </head>
 <body>
 <div class="container">
 
     <div style="display:flex; justify-content:flex-end; gap:14px; margin-bottom:8px;">
-        <a href="/parlay" style="color:#fbbf24; font-weight:bold;">🎯 Parlay</a>
+        <a href="/parlay" style="color:#fbbf24; font-weight:bold;">🎯 Parlay<span class="parlay-badge"></span></a>
         <a href="/watchlist" style="color:#93c5fd; font-weight:bold;">Watchlist</a>
         <a href="/logout" style="color:white;">Logout</a>
     </div>
@@ -344,6 +362,39 @@
 // `r` is the ai_review object: { verdict, confidence, note }.
 // Visual edge bar: width + color reflect the model's projected edge.
 // Negative edges shouldn't surface for displayed picks but are handled.
+// Parlay builder — store picks in localStorage, click-to-add from any card.
+window.__PARLAY_KEY = "mlblab_parlay_legs";
+window.__parlayGet = function () {
+    try { return JSON.parse(localStorage.getItem(window.__PARLAY_KEY) || "[]"); }
+    catch { return []; }
+};
+window.__parlaySet = function (legs) {
+    localStorage.setItem(window.__PARLAY_KEY, JSON.stringify(legs));
+    window.__parlayUpdateBadge();
+};
+window.__parlayAdd = function (leg, btn) {
+    const legs = window.__parlayGet();
+    // Dedupe by player+stat+pick+line.
+    const key = `${leg.player}|${leg.stat}|${leg.pick}|${leg.line}`;
+    if (legs.some(L => `${L.player}|${L.stat}|${L.pick}|${L.line}` === key)) {
+        if (btn) { btn.textContent = "✓ In parlay"; }
+        return;
+    }
+    legs.push(leg);
+    window.__parlaySet(legs);
+    if (btn) {
+        btn.textContent = "✓ Added";
+        btn.classList.add("parlay-added");
+    }
+};
+window.__parlayUpdateBadge = function () {
+    const n = window.__parlayGet().length;
+    document.querySelectorAll(".parlay-badge").forEach(el => {
+        el.textContent = n > 0 ? ` (${n})` : "";
+    });
+};
+document.addEventListener("DOMContentLoaded", window.__parlayUpdateBadge);
+
 window.__edgeBar = function (edge) {
     if (edge == null || edge === "") return "";
     const v = Math.abs(Number(edge) || 0);
@@ -428,6 +479,7 @@ window.__aiPill = function (r) {
                 <div class="prob-big ${probTier(p.probability)}">${escape(p.probability)}%</div>
               </a>
               <button class="track-btn" data-idx="${idx}">+ Track</button>
+              <button class="parlay-btn" data-parlay-idx="${idx}">🎯 + Parlay</button>
             </div>`;
     };
 
@@ -456,6 +508,32 @@ window.__aiPill = function (r) {
                 return r.confidence === "HIGH" && edge >= 10;
             }
             return true;
+        });
+    };
+
+    const wireParlayButtons = () => {
+        grid.querySelectorAll(".parlay-btn").forEach(btn => {
+            const idx = parseInt(btn.dataset.parlayIdx, 10);
+            const play = lastPlays[idx];
+            if (!play) return;
+            // Mark already-added.
+            const existing = window.__parlayGet();
+            const key = `${play.headline}|${play.stat_label}|${play.pick}|${play.line}`;
+            if (existing.some(L => `${L.player}|${L.stat}|${L.pick}|${L.line}` === key)) {
+                btn.textContent = "✓ In parlay";
+                btn.classList.add("parlay-added");
+            }
+            btn.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                window.__parlayAdd({
+                    player: play.headline,
+                    stat: play.stat_label,
+                    pick: play.pick,
+                    line: play.line,
+                    probability: play.probability,
+                    matchup: play.matchup,
+                }, btn);
+            });
         });
     };
 
@@ -516,6 +594,7 @@ window.__aiPill = function (r) {
             .map(p => cardHtml(p, lastPlays.indexOf(p)))
             .join("");
         wireTrackButtons();
+        wireParlayButtons();
     };
 
     // Wire filter buttons.
@@ -581,15 +660,38 @@ window.__aiPill = function (r) {
                 </div>
                 <div class="prob-big" style="color:#fb923c;">${escape(t.probability)}% HR</div>
               </a>
+              <button class="parlay-btn" data-hr-key="${escape(t.player)}">🎯 + Parlay</button>
             </div>`;
     };
 
+    let lastThreats = [];
+    const wireHrParlay = () => {
+        grid.querySelectorAll(".parlay-btn").forEach(btn => {
+            const name = btn.dataset.hrKey;
+            const t = lastThreats.find(x => x.player === name);
+            if (!t) return;
+            const existing = window.__parlayGet();
+            const key = `${t.player}|Home Run|OVER|0.5`;
+            if (existing.some(L => `${L.player}|${L.stat}|${L.pick}|${L.line}` === key)) {
+                btn.textContent = "✓ In parlay"; btn.classList.add("parlay-added");
+            }
+            btn.addEventListener("click", () => {
+                window.__parlayAdd({
+                    player: t.player, stat: "Home Run", pick: "OVER", line: 0.5,
+                    probability: t.probability, matchup: t.matchup || "",
+                }, btn);
+            });
+        });
+    };
+
     const render = (threats) => {
+        lastThreats = threats || [];
         if (!threats || threats.length === 0) {
             grid.innerHTML = '<div class="card empty">No HR threats yet — still computing.</div>';
             return;
         }
         grid.innerHTML = threats.map(cardHtml).join("");
+        wireHrParlay();
     };
 
     const loadThreats = () => {
@@ -858,7 +960,27 @@ window.__aiPill = function (r) {
                 <div class="prob-big ${probTier(c.probability)}">${escape(c.probability)}%</div>
               </a>
               <button class="track-btn hrr-track-btn" data-idx="${idx}">+ Track</button>
+              <button class="parlay-btn hrr-parlay-btn" data-idx="${idx}">🎯 + Parlay</button>
             </div>`;
+    };
+
+    const wireParlay = () => {
+        grid.querySelectorAll(".hrr-parlay-btn").forEach(btn => {
+            const idx = parseInt(btn.dataset.idx, 10);
+            const c = lastCombos[idx];
+            if (!c) return;
+            const existing = window.__parlayGet();
+            const key = `${c.player}|1+ H/R/RBI|OVER|0.5`;
+            if (existing.some(L => `${L.player}|${L.stat}|${L.pick}|${L.line}` === key)) {
+                btn.textContent = "✓ In parlay"; btn.classList.add("parlay-added");
+            }
+            btn.addEventListener("click", () => {
+                window.__parlayAdd({
+                    player: c.player, stat: "1+ H/R/RBI", pick: "OVER", line: 0.5,
+                    probability: c.probability, matchup: c.matchup || "",
+                }, btn);
+            });
+        });
     };
 
     const wireTrackButtons = () => {
@@ -915,6 +1037,7 @@ window.__aiPill = function (r) {
         }
         grid.innerHTML = combos.map((c, i) => cardHtml(c, i)).join("");
         wireTrackButtons();
+        wireParlay();
     };
 
     const load = () => {
@@ -943,30 +1066,56 @@ window.__aiPill = function (r) {
     const escape = (s) => String(s == null ? "" : s)
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+    let lockData = [];
     const lockCard = (p, i) => {
         const link = p.game_pk ? `/game/${p.game_pk}` : "#";
         const ranks = ["LOCK #1", "LOCK #2", "LOCK #3"];
         const aiBit = window.__aiPill ? window.__aiPill(p.ai_review) : "";
         const edgeBit = window.__edgeBar ? window.__edgeBar(p.edge) : "";
         return `
-          <a class="hero-card" href="${link}">
-            <div class="lock-rank">${ranks[i] || "LOCK"}</div>
-            <div class="lock-headline">${escape(p.headline)}</div>
-            <div class="lock-stat">${escape(p.stat_label)} ${escape(p.pick || "")} ${p.line != null ? escape(p.line) : ""}</div>
-            <div class="lock-stat" style="color:#a7f3d0;">${escape(p.matchup || "")}</div>
-            <div class="lock-prob">${escape(p.probability)}%</div>
-            ${edgeBit}
-            ${aiBit}
-          </a>`;
+          <div class="hero-card-wrap">
+            <a class="hero-card" href="${link}">
+              <div class="lock-rank">${ranks[i] || "LOCK"}</div>
+              <div class="lock-headline">${escape(p.headline)}</div>
+              <div class="lock-stat">${escape(p.stat_label)} ${escape(p.pick || "")} ${p.line != null ? escape(p.line) : ""}</div>
+              <div class="lock-stat" style="color:#a7f3d0;">${escape(p.matchup || "")}</div>
+              <div class="lock-prob">${escape(p.probability)}%</div>
+              ${edgeBit}
+              ${aiBit}
+            </a>
+            <button class="parlay-btn" data-lock-idx="${i}">🎯 + Parlay</button>
+          </div>`;
+    };
+
+    const wireLockParlay = () => {
+        row.querySelectorAll(".parlay-btn").forEach(btn => {
+            const i = parseInt(btn.dataset.lockIdx, 10);
+            const p = lockData[i];
+            if (!p) return;
+            const existing = window.__parlayGet();
+            const key = `${p.headline}|${p.stat_label}|${p.pick}|${p.line}`;
+            if (existing.some(L => `${L.player}|${L.stat}|${L.pick}|${L.line}` === key)) {
+                btn.textContent = "✓ In parlay";
+                btn.classList.add("parlay-added");
+            }
+            btn.addEventListener("click", () => {
+                window.__parlayAdd({
+                    player: p.headline, stat: p.stat_label, pick: p.pick,
+                    line: p.line, probability: p.probability, matchup: p.matchup,
+                }, btn);
+            });
+        });
     };
 
     const render = (plays) => {
         const top = (plays || []).slice(0, 3);
+        lockData = top;
         if (top.length === 0) {
             row.innerHTML = '<div class="hero-card"><div class="lock-stat">No locks surfaced yet — still computing.</div></div>';
             return;
         }
         row.innerHTML = top.map(lockCard).join("");
+        wireLockParlay();
     };
 
     const load = () => {

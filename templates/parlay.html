@@ -64,6 +64,18 @@
         <a href="/watchlist">Watchlist</a>
     </div>
 
+    <div id="stash-banner" class="card" style="display:none; background:#422006; border-color:#b45309;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+            <div style="font-size:13px; color:#fde68a;">
+                <strong>📥 <span id="stash-count">0</span> picks</strong> added from your slate.
+            </div>
+            <div style="display:flex; gap:6px;">
+                <button class="btn secondary" style="width:auto; margin:0; padding:6px 10px; font-size:12px;" onclick="loadStash()">Load into builder</button>
+                <button class="btn secondary" style="width:auto; margin:0; padding:6px 10px; font-size:12px;" onclick="clearStash()">Clear</button>
+            </div>
+        </div>
+    </div>
+
     <h1>🎯 Parlay Grader</h1>
     <p class="sub">Mix any props (hits, HR, TB, RBI, K, H/R/RBI). AI grades the parlay considering correlation, park, weather, and matchups.</p>
 
@@ -242,8 +254,45 @@ function renderResult(d) {
     box.scrollIntoView({behavior:"smooth", block:"start"});
 }
 
+// ── Stash from click-to-add buttons across the app ──
+const STASH_KEY = "mlblab_parlay_legs";
+function getStash() {
+    try { return JSON.parse(localStorage.getItem(STASH_KEY) || "[]"); }
+    catch { return []; }
+}
+function setStash(arr) {
+    localStorage.setItem(STASH_KEY, JSON.stringify(arr));
+    renderStashBanner();
+}
+function renderStashBanner() {
+    const stash = getStash();
+    const banner = document.getElementById("stash-banner");
+    document.getElementById("stash-count").textContent = stash.length;
+    banner.style.display = stash.length > 0 ? "block" : "none";
+}
+function loadStash() {
+    const stash = getStash();
+    if (!stash.length) return;
+    // Merge into legs, dedupe by player|stat|pick|line.
+    const keyOf = (L) => `${L.player}|${L.stat}|${L.pick}|${L.line}`;
+    const have = new Set(legs.map(keyOf));
+    stash.forEach(s => {
+        if (!have.has(keyOf(s))) { legs.push({ ...s }); have.add(keyOf(s)); }
+    });
+    renderLegs();
+}
+function clearStash() {
+    localStorage.removeItem(STASH_KEY);
+    renderStashBanner();
+}
+
 renderLegs();
 loadSlatePicks();
+renderStashBanner();
+// Auto-load stash on first visit so user sees what they tapped.
+if (getStash().length > 0 && legs.length === 0) {
+    loadStash();
+}
 </script>
 </body>
 </html>

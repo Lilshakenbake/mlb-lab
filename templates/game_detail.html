@@ -152,6 +152,22 @@
         .track-btn.tracked {
             background: #14532d; color:#bbf7d0; border-color:#22c55e; cursor: default;
         }
+        .parlay-btn {
+            margin-top: 6px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid #b45309;
+            background: #422006;
+            color: #fbbf24;
+            font-weight: bold;
+            font-size: 11px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .parlay-btn:hover { background: #5b2c0a; }
+        .parlay-btn.parlay-added {
+            background: #14532d; color:#bbf7d0; border-color:#22c55e;
+        }
     </style>
 </head>
 <body>
@@ -159,6 +175,7 @@
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
             <div style="display:flex; gap:14px; align-items:center;">
                 <a href="/logout" style="color:white;">Logout</a>
+                <a href="/parlay" style="color:#fbbf24; font-weight:bold;">🎯 Parlay<span class="parlay-badge"></span></a>
                 <a href="/watchlist" style="color:#93c5fd; font-weight:bold;">Watchlist</a>
             </div>
             <a class="button-link" href="/" style="width:auto;">Back to Slate</a>
@@ -175,6 +192,14 @@
                 data-edge="{{ edge if edge is not none else '' }}"
                 data-probability="{{ probability if probability is not none else 0 }}"
                 data-model-used="{{ '1' if model_used else '0' }}">+ Track</button>
+            {% if kind not in ("moneyline", "runline") %}
+            <button class="parlay-btn parlay-add-btn"
+                data-player="{{ headline }}"
+                data-stat="{{ stat_label }}"
+                data-pick="{{ pick or '' }}"
+                data-line="{{ line if line is not none else '' }}"
+                data-probability="{{ probability if probability is not none else 0 }}">🎯 + Parlay</button>
+            {% endif %}
         {%- endmacro %}
 
         {# Visual edge bar — color + width reflect projected edge magnitude. #}
@@ -463,6 +488,58 @@
                 }
             });
         });
+    })();
+
+    // ── Parlay click-to-add (mirrors helpers in index.html) ──
+    (function () {
+        const KEY = "mlblab_parlay_legs";
+        const get = () => { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; } };
+        const set = (legs) => { localStorage.setItem(KEY, JSON.stringify(legs)); updateBadge(); };
+        const updateBadge = () => {
+            const n = get().length;
+            document.querySelectorAll(".parlay-badge").forEach(el => {
+                el.textContent = n > 0 ? ` (${n})` : "";
+            });
+        };
+        const keyOf = (L) => `${L.player}|${L.stat}|${L.pick}|${L.line}`;
+
+        // Mark already-added.
+        const existing = get();
+        document.querySelectorAll(".parlay-add-btn").forEach(btn => {
+            const ds = btn.dataset;
+            const k = `${ds.player}|${ds.stat}|${ds.pick}|${ds.line}`;
+            if (existing.some(L => keyOf(L) === k)) {
+                btn.textContent = "✓ In parlay";
+                btn.classList.add("parlay-added");
+            }
+        });
+
+        document.addEventListener("click", (ev) => {
+            const btn = ev.target.closest(".parlay-add-btn");
+            if (!btn) return;
+            ev.preventDefault();
+            const ds = btn.dataset;
+            const leg = {
+                player: ds.player,
+                stat: ds.stat,
+                pick: ds.pick,
+                line: ds.line === "" ? null : Number(ds.line),
+                probability: Number(ds.probability) || 0,
+                matchup: "",
+            };
+            const legs = get();
+            if (legs.some(L => keyOf(L) === keyOf(leg))) {
+                btn.textContent = "✓ In parlay";
+                btn.classList.add("parlay-added");
+                return;
+            }
+            legs.push(leg);
+            set(legs);
+            btn.textContent = "✓ Added";
+            btn.classList.add("parlay-added");
+        });
+
+        updateBadge();
     })();
     </script>
 </body>
