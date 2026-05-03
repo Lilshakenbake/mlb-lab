@@ -217,6 +217,22 @@
         .track-btn.tracked {
             background: #14532d; color:#bbf7d0; border-color:#22c55e; cursor: default;
         }
+        .filter-btn {
+            padding: 8px 14px;
+            border-radius: 999px;
+            border: 1px solid #334155;
+            background: #1e293b;
+            color: #cbd5e1;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .filter-btn:hover { background: #233047; }
+        .filter-btn.active {
+            background: #1e40af;
+            color: #fff;
+            border-color: #3b82f6;
+        }
     </style>
 </head>
 <body>
@@ -287,6 +303,13 @@
 
     <h2 id="plays">📈 Plays of the Day</h2>
     <p class="sub">Highest win-probability picks across the entire slate</p>
+
+    <div id="plays-filter" style="display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 14px;">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="agree">🤖 AI Agrees</button>
+        <button class="filter-btn" data-filter="sharp">🎯 Sharp Plays</button>
+    </div>
+    <div id="plays-count" class="sub" style="font-size:12px; color:#94a3b8; margin:-6px 0 10px;"></div>
 
     <div id="plays-of-day" class="games-grid">
         <div class="card empty" id="plays-loading">Loading top plays…</div>
@@ -391,6 +414,25 @@ window.__aiPill = function (r) {
     };
 
     let lastPlays = [];
+    let currentFilter = "all";
+
+    // Filter logic:
+    //   all   = everything
+    //   agree = AI verdict is AGREE (any confidence)
+    //   sharp = AI AGREE + HIGH confidence + edge >= 10%
+    const applyFilter = (plays) => {
+        if (currentFilter === "all") return plays;
+        return plays.filter(p => {
+            const r = p.ai_review;
+            if (!r || r.verdict !== "AGREE") return false;
+            if (currentFilter === "agree") return true;
+            if (currentFilter === "sharp") {
+                const edge = Math.abs(Number(p.edge) || 0);
+                return r.confidence === "HIGH" && edge >= 10;
+            }
+            return true;
+        });
+    };
 
     const wireTrackButtons = () => {
         grid.querySelectorAll(".track-btn").forEach(btn => {
@@ -425,15 +467,42 @@ window.__aiPill = function (r) {
         });
     };
 
+    const countEl = document.getElementById("plays-count");
+
     const render = (plays) => {
-        lastPlays = plays || [];
-        if (!plays || plays.length === 0) {
-            grid.innerHTML = '<div class="card empty">No strong plays surfaced yet.</div>';
+        if (Array.isArray(plays)) lastPlays = plays;
+        const filtered = applyFilter(lastPlays);
+        if (countEl) {
+            countEl.textContent = currentFilter === "all"
+                ? `Showing all ${lastPlays.length} plays`
+                : `Showing ${filtered.length} of ${lastPlays.length} plays`;
+        }
+        if (!filtered || filtered.length === 0) {
+            const msg = currentFilter === "sharp"
+                ? "No sharp plays right now (need AI ✓ HIGH + edge ≥10%). Try AI Agrees or All."
+                : currentFilter === "agree"
+                ? "No AI-agreed plays right now. Try All."
+                : "No strong plays surfaced yet.";
+            grid.innerHTML = `<div class="card empty">${msg}</div>`;
             return;
         }
-        grid.innerHTML = plays.map((p, i) => cardHtml(p, i)).join("");
+        // Use original index from lastPlays so track buttons still work.
+        grid.innerHTML = filtered
+            .map(p => cardHtml(p, lastPlays.indexOf(p)))
+            .join("");
         wireTrackButtons();
     };
+
+    // Wire filter buttons.
+    document.querySelectorAll("#plays-filter .filter-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll("#plays-filter .filter-btn")
+                .forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            currentFilter = btn.dataset.filter;
+            render();
+        });
+    });
 
     const loadPlays = () => {
         fetch("/api/plays-of-day", { credentials: "same-origin" })
