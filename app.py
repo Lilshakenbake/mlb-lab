@@ -1082,8 +1082,8 @@ def api_parlay_grade():
     legs = payload.get("legs") or []
     if not isinstance(legs, list) or not legs:
         return jsonify({"ok": False, "error": "Provide at least 1 leg"}), 400
-    if len(legs) > 12:
-        return jsonify({"ok": False, "error": "Max 12 legs"}), 400
+    if len(legs) > 25:
+        return jsonify({"ok": False, "error": "Max 25 legs (sportsbook standard)"}), 400
     # Sanitize legs to safe primitive fields only.
     clean = []
     for L in legs:

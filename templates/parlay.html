@@ -188,7 +188,7 @@ async function gradeParlay() {
     const err = document.getElementById("error");
     err.textContent = "";
     if (legs.length === 0) { err.textContent = "Add at least 1 leg."; return; }
-    if (legs.length > 12) { err.textContent = "Max 12 legs."; return; }
+    if (legs.length > 25) { err.textContent = "Max 25 legs."; return; }
     btn.disabled = true; btn.textContent = "🤖 Grading…";
     try {
         const resp = await fetch("/api/parlay/grade", {
