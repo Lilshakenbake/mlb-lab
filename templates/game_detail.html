@@ -177,6 +177,28 @@
                 data-model-used="{{ '1' if model_used else '0' }}">+ Track</button>
         {%- endmacro %}
 
+        {# Visual edge bar — color + width reflect projected edge magnitude. #}
+        {% macro edge_bar(edge) -%}
+            {% if edge is not none and edge != "" %}
+                {% set v = edge|abs %}
+                {% if v >= 15 %}{% set color = "#22c55e" %}{% set lbl = "ELITE" %}
+                {% elif v >= 10 %}{% set color = "#84cc16" %}{% set lbl = "STRONG" %}
+                {% elif v >= 5 %}{% set color = "#eab308" %}{% set lbl = "DECENT" %}
+                {% else %}{% set color = "#64748b" %}{% set lbl = "THIN" %}
+                {% endif %}
+                {% set pct = [[v * 5, 8]|max, 100]|min %}
+                <div style="margin-top:6px;">
+                  <div style="display:flex; justify-content:space-between; font-size:10px; color:#94a3b8; margin-bottom:2px;">
+                    <span>EDGE {{ lbl }}</span>
+                    <span style="color:{{ color }}; font-weight:700;">{{ "%.1f"|format(v) }}%</span>
+                  </div>
+                  <div style="height:5px; background:#1e293b; border-radius:3px; overflow:hidden;">
+                    <div style="height:100%; width:{{ pct }}%; background:{{ color }};"></div>
+                  </div>
+                </div>
+            {% endif %}
+        {%- endmacro %}
+
         {# AI second-opinion pill — colored by verdict (AGREE / LEAN / FADE).
            Renders nothing if no ai_review attached to the prop. #}
         {% macro ai_pill(r) -%}
@@ -258,6 +280,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {{ edge_bar(prop.edge) }}
                             {{ ai_pill(prop.ai_review) }}
                             {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Hits", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
@@ -282,6 +305,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {{ edge_bar(prop.edge) }}
                             {{ ai_pill(prop.ai_review) }}
                             {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Home Runs", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
@@ -306,6 +330,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {{ edge_bar(prop.edge) }}
                             {{ ai_pill(prop.ai_review) }}
                             {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Total Bases", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
@@ -330,6 +355,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {{ edge_bar(prop.edge) }}
                             {{ ai_pill(prop.ai_review) }}
                             {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "RBIs", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
@@ -353,6 +379,7 @@
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             {% if prop.matchup_note %}<div class="detail" style="color:#fcd34d; font-size:12px;">{{ prop.matchup_note }}</div>{% endif %}
                             <div class="status">vs {{ prop.pitcher }}{% if prop.lineup_spot %} · #{{ prop.lineup_spot }}{% endif %}</div>
+                            {{ edge_bar(prop.edge) }}
                             {{ ai_pill(prop.ai_review) }}
                             {% if prop.pick != "PASS" %}{{ track_button("hitter_combo", prop.player, "1+ H/R/RBI", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>
@@ -377,6 +404,7 @@
                             <div class="detail"><strong>Pick:</strong> {{ prop.pick }}</div>
                             <div class="detail"><strong>Win %:</strong> {{ prop.probability }}%</div>
                             <div class="status">{{ prop.matchup_note }}</div>
+                            {{ edge_bar(prop.edge) }}
                             {{ ai_pill(prop.ai_review) }}
                             {% if prop.pick != "PASS" %}{{ track_button("pitcher", prop.pitcher, "Strikeouts", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
                         </div>

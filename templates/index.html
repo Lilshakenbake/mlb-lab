@@ -341,6 +341,28 @@
 <script>
 // Shared helper: render the OpenAI second-opinion pill for a pick.
 // `r` is the ai_review object: { verdict, confidence, note }.
+// Visual edge bar: width + color reflect the model's projected edge.
+// Negative edges shouldn't surface for displayed picks but are handled.
+window.__edgeBar = function (edge) {
+    if (edge == null || edge === "") return "";
+    const v = Math.abs(Number(edge) || 0);
+    let color, label;
+    if (v >= 15)      { color = "#22c55e"; label = "ELITE"; }
+    else if (v >= 10) { color = "#84cc16"; label = "STRONG"; }
+    else if (v >= 5)  { color = "#eab308"; label = "DECENT"; }
+    else              { color = "#64748b"; label = "THIN"; }
+    const pct = Math.min(100, Math.max(8, v * 5));
+    return `
+        <div style="margin-top:6px;">
+          <div style="display:flex; justify-content:space-between; font-size:10px; color:#94a3b8; margin-bottom:2px;">
+            <span>EDGE ${label}</span><span style="color:${color}; font-weight:700;">${v.toFixed(1)}%</span>
+          </div>
+          <div style="height:5px; background:#1e293b; border-radius:3px; overflow:hidden;">
+            <div style="height:100%; width:${pct}%; background:${color};"></div>
+          </div>
+        </div>`;
+};
+
 window.__aiPill = function (r) {
     if (!r || !r.verdict) return "";
     const esc = (s) => String(s == null ? "" : s)
@@ -387,6 +409,7 @@ window.__aiPill = function (r) {
             : "";
         const link = p.game_pk ? `/game/${p.game_pk}` : "#";
         const aiBit = window.__aiPill ? window.__aiPill(p.ai_review) : "";
+        const edgeBit = window.__edgeBar ? window.__edgeBar(p.edge) : "";
         return `
             <div class="card play-card">
               <a href="${link}" style="text-decoration:none; color:inherit;">
@@ -398,6 +421,7 @@ window.__aiPill = function (r) {
                   </div>
                   ${lineBit}
                   <div class="matchup-line">${escape(p.matchup)}</div>
+                  ${edgeBit}
                   ${aiBit}
                 </div>
                 <div class="prob-big ${probTier(p.probability)}">${escape(p.probability)}%</div>
@@ -922,6 +946,7 @@ window.__aiPill = function (r) {
         const link = p.game_pk ? `/game/${p.game_pk}` : "#";
         const ranks = ["LOCK #1", "LOCK #2", "LOCK #3"];
         const aiBit = window.__aiPill ? window.__aiPill(p.ai_review) : "";
+        const edgeBit = window.__edgeBar ? window.__edgeBar(p.edge) : "";
         return `
           <a class="hero-card" href="${link}">
             <div class="lock-rank">${ranks[i] || "LOCK"}</div>
@@ -929,6 +954,7 @@ window.__aiPill = function (r) {
             <div class="lock-stat">${escape(p.stat_label)} ${escape(p.pick || "")} ${p.line != null ? escape(p.line) : ""}</div>
             <div class="lock-stat" style="color:#a7f3d0;">${escape(p.matchup || "")}</div>
             <div class="lock-prob">${escape(p.probability)}%</div>
+            ${edgeBit}
             ${aiBit}
           </a>`;
     };
