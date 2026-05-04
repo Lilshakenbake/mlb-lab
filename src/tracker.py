@@ -17,6 +17,33 @@ VALID_RESULTS = {"WIN", "LOSS", "PUSH"}
 DEFAULT_ODDS = -110
 
 
+def american_to_implied(american_odds) -> float | None:
+    """Convert American odds to implied probability (0-1). Includes vig."""
+    try:
+        o = float(american_odds)
+    except (TypeError, ValueError):
+        return None
+    if o == 0:
+        return None
+    if o > 0:
+        return 100.0 / (o + 100.0)
+    return abs(o) / (abs(o) + 100.0)
+
+
+def compute_clv_pp(opening_odds, closing_odds) -> float | None:
+    """CLV expressed in implied-probability percentage points.
+
+    Positive = you beat the close (good — closing line moved past your number).
+    Negative = market moved against your bet (bad).
+
+    Example: bet OVER -110 (47.6%), closes -130 (56.5%) → +8.9pp CLV."""
+    p_open = american_to_implied(opening_odds)
+    p_close = american_to_implied(closing_odds)
+    if p_open is None or p_close is None:
+        return None
+    return round((p_close - p_open) * 100.0, 2)
+
+
 def odds_to_profit(american_odds) -> float:
     """Profit per 1.0u stake on a winning bet at the given American odds.
     -110 -> +0.909, +130 -> +1.30."""
@@ -154,6 +181,16 @@ def init_db():
             if "units" not in cols:
                 conn.execute("ALTER TABLE tracked_plays ADD COLUMN units REAL DEFAULT 1.0")
                 conn.execute("UPDATE tracked_plays SET units=1.0 WHERE units IS NULL")
+            # CLV (closing-line value) — captured at bet time + first pitch.
+            for col, decl in (
+                ("opening_odds", "REAL"),
+                ("opening_book", "TEXT"),
+                ("closing_odds", "REAL"),
+                ("closing_book", "TEXT"),
+                ("clv_pp", "REAL"),
+            ):
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE tracked_plays ADD COLUMN {col} {decl}")
         _INITIALIZED = True
 
 
@@ -182,6 +219,11 @@ def add_play(payload: dict) -> dict:
     if units_in is None or units_in <= 0:
         edge_in = _to_float(payload.get("edge"))
         units_in = suggest_units(prob, edge=edge_in, odds=odds_in)
+    # Snapshot the line at bet-placement time for later CLV calc.
+    opening_odds_in = _to_float(payload.get("opening_odds"))
+    if opening_odds_in is None:
+        opening_odds_in = odds_in  # fall back to user-entered/book odds
+    opening_book_in = (payload.get("opening_book") or payload.get("book") or "").strip() or None
     row = {
         "created_at": datetime.utcnow().isoformat(timespec="seconds"),
         "game_pk": payload.get("game_pk"),
@@ -198,6 +240,8 @@ def add_play(payload: dict) -> dict:
         "model_used": 1 if payload.get("model_used") else 0,
         "odds": odds_in,
         "units": units_in,
+        "opening_odds": opening_odds_in,
+        "opening_book": opening_book_in,
     }
 
     with _connect() as conn:
@@ -223,17 +267,50 @@ def add_play(payload: dict) -> dict:
             """
             INSERT INTO tracked_plays
               (created_at, game_pk, game_date, matchup, kind, headline,
-               stat_label, pick, line, projection, edge, probability, model_used, odds, units)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               stat_label, pick, line, projection, edge, probability, model_used,
+               odds, units, opening_odds, opening_book)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["created_at"], row["game_pk"], row["game_date"], row["matchup"],
                 row["kind"], row["headline"], row["stat_label"], row["pick"],
                 row["line"], row["projection"], row["edge"], row["probability"],
                 row["model_used"], row["odds"], row["units"],
+                row["opening_odds"], row["opening_book"],
             ),
         )
         return {"ok": True, "id": cur.lastrowid, "duplicate": False}
+
+
+def list_pending_for_clv() -> list[dict]:
+    """Plays missing closing_odds — candidates for the close-line snapshot."""
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tracked_plays WHERE closing_odds IS NULL"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_closing_odds(play_id: int, closing_odds, closing_book: str | None = None) -> bool:
+    """Write the closing line for a play and compute CLV (in pp)."""
+    init_db()
+    co = _to_float(closing_odds)
+    if co is None:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT opening_odds, odds FROM tracked_plays WHERE id=?", (play_id,)
+        ).fetchone()
+        if not row:
+            return False
+        opening = row["opening_odds"] if row["opening_odds"] is not None else row["odds"]
+        clv = compute_clv_pp(opening, co)
+        cur = conn.execute(
+            "UPDATE tracked_plays SET closing_odds=?, closing_book=?, clv_pp=? WHERE id=?",
+            (co, closing_book, clv, play_id),
+        )
+        return cur.rowcount > 0
 
 
 def update_odds(play_id: int, odds) -> bool:
@@ -387,6 +464,24 @@ def summary_stats() -> dict:
 
     roi_pct = round((total_units / total_staked) * 100, 1) if total_staked > 0 else None
 
+    # ----- CLV (closing-line value) -----
+    clv_vals: list[float] = []
+    clv_pos = 0
+    with _connect() as conn:
+        for r in conn.execute(
+            "SELECT clv_pp FROM tracked_plays WHERE clv_pp IS NOT NULL"
+        ):
+            try:
+                v = float(r["clv_pp"])
+            except (TypeError, ValueError):
+                continue
+            clv_vals.append(v)
+            if v > 0:
+                clv_pos += 1
+    clv_count = len(clv_vals)
+    avg_clv_pp = round(sum(clv_vals) / clv_count, 2) if clv_count else None
+    clv_beat_pct = round((clv_pos / clv_count) * 100, 1) if clv_count else None
+
     market_breakdown = []
     for k, b in by_market.items():
         decided_b = b["wins"] + b["losses"]
@@ -420,5 +515,8 @@ def summary_stats() -> dict:
         "total_units": round(total_units, 2),
         "total_staked": round(total_staked, 2),
         "roi_pct": roi_pct,
+        "avg_clv_pp": avg_clv_pp,
+        "clv_beat_pct": clv_beat_pct,
+        "clv_count": clv_count,
         "market_breakdown": market_breakdown,
     }

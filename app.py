@@ -1113,10 +1113,127 @@ def admin_warm_cache():
     })
 
 
+def _snap_closing_lines_for_pending() -> dict:
+    """Match pending tracked plays to current live odds and write closing_odds.
+
+    Returns counts: {checked, snapped, skipped, errors}.
+    Safe to call repeatedly — it only touches plays missing closing_odds, and
+    a play is only "closed" once per call. Cheap when there's nothing to do.
+    """
+    from src import live_odds as _lo
+
+    pending = tracker.list_pending_for_clv()
+    if not pending:
+        return {"checked": 0, "snapped": 0, "skipped": 0, "errors": 0}
+
+    odds_list = None
+    try:
+        odds_list = _lo.fetch_game_odds()
+    except Exception:
+        odds_list = None
+    if not odds_list:
+        return {"checked": len(pending), "snapped": 0, "skipped": len(pending), "errors": 0}
+
+    # Lazy per-event prop cache so we only fetch each game's props once.
+    props_cache: dict[str, dict] = {}
+
+    def _props_for(event_id: str):
+        if event_id in props_cache:
+            return props_cache[event_id]
+        try:
+            ev = _lo.fetch_player_props(event_id)
+        except Exception:
+            ev = None
+        props_cache[event_id] = ev or {}
+        return props_cache[event_id]
+
+    PROP_MARKETS = {
+        "Hits": "batter_hits",
+        "Home Runs": "batter_home_runs",
+        "Total Bases": "batter_total_bases",
+        "RBIs": "batter_rbis",
+        "Strikeouts": "pitcher_strikeouts",
+    }
+
+    snapped = 0
+    skipped = 0
+    errors = 0
+    for p in pending:
+        try:
+            matchup = (p.get("matchup") or "").split(" @ ")
+            if len(matchup) != 2:
+                skipped += 1
+                continue
+            away, home = matchup[0].strip(), matchup[1].strip()
+            # The Odds API sometimes flips home/away vs MLB (DH games, neutral
+            # sites). Try both orderings.
+            g = _lo.find_game(odds_list, home, away) or _lo.find_game(odds_list, away, home)
+            if not g:
+                skipped += 1
+                continue
+
+            kind = (p.get("kind") or "").lower()
+            pick = (p.get("pick") or "").upper()
+            close_book = None
+            close_odds = None
+
+            if kind == "moneyline":
+                team = (p.get("headline") or "").replace(" ML", "").strip()
+                best = _lo.best_moneyline(g, team)
+                if best:
+                    close_odds = best["american"]
+                    close_book = best["book"]
+            elif kind == "runline":
+                hl = p.get("headline") or ""
+                side = "-1.5" if " -1.5" in hl else ("+1.5" if " +1.5" in hl else None)
+                if side:
+                    team = hl.split(f" {side}")[0].strip()
+                    best = _lo.best_runline(g, team, side)
+                    if best:
+                        close_odds = best["american"]
+                        close_book = best["book"]
+            elif kind in ("hitter", "pitcher"):
+                market = PROP_MARKETS.get(p.get("stat_label") or "")
+                if market and pick in ("OVER", "UNDER"):
+                    ev = _props_for(g.get("id"))
+                    if ev:
+                        side = "Over" if pick == "OVER" else "Under"
+                        # Only snap if the closing line still offers our exact
+                        # opening point. If the line moved (e.g. 8.5 → 9.0),
+                        # leave pending — comparing prices across different
+                        # lines would yield a misleading "phantom" CLV.
+                        target_point = p.get("line")
+                        best = _lo.best_player_prop(
+                            ev, market, p.get("headline") or "", side,
+                            target_point=target_point,
+                        )
+                        if best:
+                            close_odds = best["american"]
+                            close_book = best["book"]
+
+            if close_odds is None:
+                skipped += 1
+                continue
+            if tracker.set_closing_odds(p["id"], close_odds, close_book):
+                snapped += 1
+            else:
+                skipped += 1
+        except Exception:
+            errors += 1
+            continue
+
+    return {"checked": len(pending), "snapped": snapped, "skipped": skipped, "errors": errors}
+
+
 @app.route("/watchlist", methods=["GET"])
 @login_required
 def watchlist():
     grade_state = grader.trigger_background_grade(force=False)
+    # Opportunistic CLV snap on each watchlist load — cheap when nothing's pending.
+    try:
+        _snap_closing_lines_for_pending()
+    except Exception:
+        pass
     plays = tracker.list_plays()
     stats = tracker.summary_stats()
     grade_info = {
@@ -1135,6 +1252,16 @@ def api_grade():
     if request.form:
         return redirect(url_for("watchlist"))
     return jsonify(state)
+
+
+@app.route("/api/clv/snap", methods=["POST"])
+@login_required
+def api_clv_snap():
+    """Manually snapshot closing lines for any tracked play missing them."""
+    result = _snap_closing_lines_for_pending()
+    if request.form:
+        return redirect(url_for("watchlist"))
+    return jsonify({"ok": True, **result})
 
 
 @app.route("/parlay", methods=["GET"])

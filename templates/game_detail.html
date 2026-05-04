@@ -181,7 +181,7 @@
             <a class="button-link" href="/" style="width:auto;">Back to Slate</a>
         </div>
 
-        {% macro track_button(kind, headline, stat_label, pick, line, projection, edge, probability, model_used) -%}
+        {% macro track_button(kind, headline, stat_label, pick, line, projection, edge, probability, model_used, book_odds=None, book=None) -%}
             <button class="track-btn"
                 data-kind="{{ kind }}"
                 data-headline="{{ headline }}"
@@ -191,7 +191,9 @@
                 data-projection="{{ projection if projection is not none else '' }}"
                 data-edge="{{ edge if edge is not none else '' }}"
                 data-probability="{{ probability if probability is not none else 0 }}"
-                data-model-used="{{ '1' if model_used else '0' }}">+ Track</button>
+                data-model-used="{{ '1' if model_used else '0' }}"
+                data-book-odds="{{ book_odds if book_odds is not none else '' }}"
+                data-book="{{ book or '' }}">+ Track</button>
             {% if kind not in ("moneyline", "runline") %}
             <button class="parlay-btn parlay-add-btn"
                 data-player="{{ headline }}"
@@ -237,6 +239,9 @@
                   </span>
                   {% if prop.prop_ev_pct is not none %}
                     <span style="color:#94a3b8;">(EV {{ '+' if prop.prop_ev_pct >= 0 else '' }}{{ prop.prop_ev_pct }}%)</span>
+                  {% endif %}
+                  {% if prop.prop_kelly is defined and prop.prop_kelly and prop.prop_kelly > 0 %}
+                    <span style="color:#60a5fa; font-weight:700;">· Kelly {{ "%.1f"|format(prop.prop_kelly) }}u</span>
                   {% endif %}
                 {% endif %}
               </div>
@@ -306,6 +311,9 @@
                           {% if spread_lean.ml_ev_pct is not none %}
                             <span style="color:#94a3b8; font-size:11px;">(EV {{ '+' if spread_lean.ml_ev_pct >= 0 else '' }}{{ spread_lean.ml_ev_pct }}%)</span>
                           {% endif %}
+                          {% if spread_lean.ml_kelly is defined and spread_lean.ml_kelly and spread_lean.ml_kelly > 0 %}
+                            <span style="color:#60a5fa; font-weight:700; font-size:12px;">· Kelly {{ "%.1f"|format(spread_lean.ml_kelly) }}u</span>
+                          {% endif %}
                           {% if spread_lean.ml_edge_pct >= 15 %}
                             <div style="color:#fbbf24; font-size:11px; margin-top:2px;">⚠️ Edge &gt;15pp — verify line isn't stale</div>
                           {% endif %}
@@ -313,7 +321,7 @@
                     </div>
                     {% endif %}
                     <div class="status">{{ spread_lean.note }}</div>
-                    {{ track_button("moneyline", spread_lean.ml_pick, "Moneyline", "ML", None, None, spread_lean.margin, spread_lean.ml_probability, false) }}
+                    {{ track_button("moneyline", spread_lean.ml_pick, "Moneyline", "ML", None, None, spread_lean.margin, spread_lean.ml_probability, false, spread_lean.ml_book_odds, spread_lean.ml_book) }}
                 </div>
 
                 <div class="card"{% if spread_lean.rl_edge_pct and spread_lean.rl_edge_pct >= 5 %} style="border-left:4px solid #34d399;"{% elif spread_lean.rl_edge_pct and spread_lean.rl_edge_pct <= -3 %} style="border-left:4px solid #fb7185;"{% endif %}>
@@ -332,6 +340,9 @@
                           {% if spread_lean.rl_ev_pct is not none %}
                             <span style="color:#94a3b8; font-size:11px;">(EV {{ '+' if spread_lean.rl_ev_pct >= 0 else '' }}{{ spread_lean.rl_ev_pct }}%)</span>
                           {% endif %}
+                          {% if spread_lean.rl_kelly is defined and spread_lean.rl_kelly and spread_lean.rl_kelly > 0 %}
+                            <span style="color:#60a5fa; font-weight:700; font-size:12px;">· Kelly {{ "%.1f"|format(spread_lean.rl_kelly) }}u</span>
+                          {% endif %}
                           {% if spread_lean.rl_edge_pct >= 15 %}
                             <div style="color:#fbbf24; font-size:11px; margin-top:2px;">⚠️ Edge &gt;15pp — verify line isn't stale</div>
                           {% endif %}
@@ -339,7 +350,7 @@
                     </div>
                     {% endif %}
                     <div class="status">{{ spread_lean.note }}</div>
-                    {{ track_button("runline", spread_lean.run_line_pick, "Run Line", "RL", None, None, spread_lean.margin, spread_lean.run_line_probability, false) }}
+                    {{ track_button("runline", spread_lean.run_line_pick, "Run Line", "RL", None, None, spread_lean.margin, spread_lean.run_line_probability, false, spread_lean.rl_book_odds, spread_lean.rl_book) }}
                 </div>
             </div>
 
@@ -370,6 +381,9 @@
                           {% if total_lean.pick_ev_pct is not none %}
                             <span style="color:#94a3b8; font-size:11px;">(EV {{ '+' if total_lean.pick_ev_pct >= 0 else '' }}{{ total_lean.pick_ev_pct }}%)</span>
                           {% endif %}
+                          {% if total_lean.pick_kelly is defined and total_lean.pick_kelly and total_lean.pick_kelly > 0 %}
+                            <span style="color:#60a5fa; font-weight:700; font-size:12px;">· Kelly {{ "%.1f"|format(total_lean.pick_kelly) }}u</span>
+                          {% endif %}
                         {% endif %}
                     </div>
                     {% endif %}
@@ -398,7 +412,7 @@
                             {{ edge_bar(prop.edge) }}
                             {{ prop_edge(prop) }}
                             {{ ai_pill(prop.ai_review) }}
-                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Hits", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
+                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Hits", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used, prop.book_odds, prop.book) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -424,7 +438,7 @@
                             {{ edge_bar(prop.edge) }}
                             {{ prop_edge(prop) }}
                             {{ ai_pill(prop.ai_review) }}
-                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Home Runs", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
+                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Home Runs", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used, prop.book_odds, prop.book) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -450,7 +464,7 @@
                             {{ edge_bar(prop.edge) }}
                             {{ prop_edge(prop) }}
                             {{ ai_pill(prop.ai_review) }}
-                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Total Bases", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
+                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "Total Bases", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used, prop.book_odds, prop.book) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -476,7 +490,7 @@
                             {{ edge_bar(prop.edge) }}
                             {{ prop_edge(prop) }}
                             {{ ai_pill(prop.ai_review) }}
-                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "RBIs", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
+                            {% if prop.pick != "PASS" %}{{ track_button("hitter", prop.player, "RBIs", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used, prop.book_odds, prop.book) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -527,7 +541,7 @@
                             {{ edge_bar(prop.edge) }}
                             {{ prop_edge(prop) }}
                             {{ ai_pill(prop.ai_review) }}
-                            {% if prop.pick != "PASS" %}{{ track_button("pitcher", prop.pitcher, "Strikeouts", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used) }}{% endif %}
+                            {% if prop.pick != "PASS" %}{{ track_button("pitcher", prop.pitcher, "Strikeouts", prop.pick, prop.line, prop.projection, prop.edge, prop.probability, prop.model_used, prop.book_odds, prop.book) }}{% endif %}
                         </div>
                     {% endfor %}
                 </div>
@@ -560,6 +574,10 @@
                     model_used: ds.modelUsed === "1",
                     matchup: matchup,
                     game_pk: gamePk,
+                    odds: num(ds.bookOdds),
+                    opening_odds: num(ds.bookOdds),
+                    opening_book: ds.book || null,
+                    book: ds.book || null,
                 };
                 btn.disabled = true;
                 btn.textContent = "Saving…";

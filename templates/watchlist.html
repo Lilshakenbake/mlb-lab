@@ -152,7 +152,36 @@
                 {% if grade_info.running %}Grading…{% else %}Grade pending now{% endif %}
             </button>
         </form>
+        <form method="post" action="/api/clv/snap" style="margin-left:8px;">
+            <button type="submit" title="Capture current line as the closing line for pending bets">Snap closing lines</button>
+        </form>
     </div>
+
+    {% if stats.clv_count and stats.clv_count > 0 %}
+        <div class="roi-bar">
+            <div class="roi-cell">
+                <div class="roi-label">Avg CLV</div>
+                <div class="roi-value {% if stats.avg_clv_pp and stats.avg_clv_pp > 0 %}up{% elif stats.avg_clv_pp and stats.avg_clv_pp < 0 %}down{% else %}flat{% endif %}">
+                    {{ "%+.2f"|format(stats.avg_clv_pp) ~ "pp" if stats.avg_clv_pp is not none else "—" }}
+                </div>
+            </div>
+            <div class="roi-cell">
+                <div class="roi-label">Beat Close</div>
+                <div class="roi-value {% if stats.clv_beat_pct and stats.clv_beat_pct >= 55 %}up{% elif stats.clv_beat_pct and stats.clv_beat_pct < 50 %}down{% else %}flat{% endif %}">
+                    {{ "%.0f"|format(stats.clv_beat_pct) ~ "%" if stats.clv_beat_pct is not none else "—" }}
+                </div>
+            </div>
+            <div class="roi-cell">
+                <div class="roi-label">Plays w/ CLV</div>
+                <div class="roi-value flat">{{ stats.clv_count }}</div>
+            </div>
+            <div class="roi-cell">
+                <form method="post" action="/api/clv/snap" style="margin:0;">
+                    <button type="submit" style="background:#2563eb; color:white; border:0; padding:8px 14px; border-radius:8px; font-weight:bold; cursor:pointer; font-size:13px;">Snap closing lines</button>
+                </form>
+            </div>
+        </div>
+    {% endif %}
 
     {% if stats.settled and stats.settled > 0 %}
         <div class="roi-bar">
@@ -206,6 +235,7 @@
                     <th>Pred %</th>
                     <th>Odds</th>
                     <th>Stake</th>
+                    <th class="hide-sm" title="Closing-line value: did you beat the close?">CLV</th>
                     <th class="hide-sm">Actual</th>
                     <th>Result</th>
                     <th>Units</th>
@@ -254,6 +284,19 @@
                             </form>
                         {% else %}
                             <span style="color:#cbd5e1; font-size:12px;">{{ "%.1f"|format(stake) }}u</span>
+                        {% endif %}
+                    </td>
+                    <td class="hide-sm">
+                        {% if p.clv_pp is not none %}
+                            {% set clv = p.clv_pp %}
+                            <span style="font-weight:700; color:{% if clv > 0 %}#34d399{% elif clv < 0 %}#fb7185{% else %}#94a3b8{% endif %};">
+                                {{ "+%.1f"|format(clv) if clv >= 0 else "%.1f"|format(clv) }}pp
+                            </span>
+                            {% if p.closing_odds is not none %}
+                              <br><span style="color:#64748b; font-size:10px;">close {{ p.closing_odds|int }}</span>
+                            {% endif %}
+                        {% else %}
+                            <span style="color:#475569;">—</span>
                         {% endif %}
                     </td>
                     <td class="hide-sm">{% if p.actual_value is not none %}{{ p.actual_value }}{% else %}—{% endif %}</td>

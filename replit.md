@@ -46,3 +46,15 @@ Provides MLB game predictions (hitter props, pitcher strikeouts, spread leans) u
 - Per-game work runs in a thread pool: weather + both team rosters/profiles
   + both pitcher profiles in parallel. Override the cache directory with
   `MLB_CACHE_DIR` env var if Render gives you a persistent disk mount.
+- **Live odds + edges (`src/live_odds.py`)**: pulls FanDuel/DK/etc via The
+  Odds API. Computes `edge_pct`, `ev_pct`, and `kelly_units` (half-Kelly,
+  capped 5u) for ML/RL/Totals/Player props. Player props gated by
+  `PROP_ODDS_ENABLED` env var (default 1). 2hr disk cache for game odds,
+  12hr per-event cache for props.
+- **Bet tracker (`src/tracker.py`)**: SQLite at `tracked_data/tracked_plays.db`.
+  Tracks per-pick odds, units (Kelly-suggested), and CLV (closing-line value).
+  CLV columns: `opening_odds`, `opening_book`, `closing_odds`, `closing_book`,
+  `clv_pp`. Watchlist auto-snaps closing lines on render and via the "Snap
+  closing lines" button (`/api/clv/snap`). Prop CLV requires the closing line
+  point to match the opening line — half-run line moves leave the pick
+  pending instead of producing phantom CLV.

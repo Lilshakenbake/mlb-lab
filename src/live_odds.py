@@ -213,6 +213,38 @@ def edge_pct(model_prob: float, book_american: float) -> float:
         return 0.0
 
 
+def kelly_units(model_prob: float, book_american: float,
+                fraction: float = 0.5, max_units: float = 5.0,
+                bankroll_pct_per_unit: float = 1.0) -> float:
+    """Kelly-criterion stake size in units. Half-Kelly default for safety.
+
+    Formula: f* = (b·p - q) / b
+      b = decimal odds - 1 (net payout per $1)
+      p = our model's win probability
+      q = 1 - p
+
+    Output: number of units to bet, where 1u = `bankroll_pct_per_unit` % of
+    bankroll. Half-Kelly (fraction=0.5) is industry standard — full Kelly is
+    too aggressive and busts you on a model error. Capped at `max_units` so
+    a single overconfident pick can't blow up the bankroll.
+
+    Returns 0.0 when there's no edge (don't bet)."""
+    try:
+        p = float(model_prob)
+        if p <= 0 or p >= 1:
+            return 0.0
+        a = float(book_american)
+        b = a / 100.0 if a >= 0 else 100.0 / abs(a)
+        q = 1.0 - p
+        f = (b * p - q) / b
+        if f <= 0:
+            return 0.0
+        units = (f * fraction * 100.0) / max(0.01, bankroll_pct_per_unit)
+        return round(min(units, max_units), 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
 def ev_pct(model_prob: float, book_american: float) -> float:
     """Expected value per $1 staked, as a percentage. Useful for Kelly sizing."""
     try:
@@ -250,6 +282,7 @@ def attach_game_edges(spread_lean: dict, game: dict, odds_list: list) -> dict:
         spread_lean["ml_book_odds"] = ml_best["american"]
         spread_lean["ml_edge_pct"] = edge_pct(model_p, ml_best["american"])
         spread_lean["ml_ev_pct"] = ev_pct(model_p, ml_best["american"])
+        spread_lean["ml_kelly"] = kelly_units(model_p, ml_best["american"])
 
     # ── Run line edge ──
     rl_pick = spread_lean.get("run_line_pick", "")
@@ -267,6 +300,7 @@ def attach_game_edges(spread_lean: dict, game: dict, odds_list: list) -> dict:
         spread_lean["rl_book_odds"] = rl_best["american"]
         spread_lean["rl_edge_pct"] = edge_pct(model_p, rl_best["american"])
         spread_lean["rl_ev_pct"] = ev_pct(model_p, rl_best["american"])
+        spread_lean["rl_kelly"] = kelly_units(model_p, rl_best["american"])
 
     return spread_lean
 
@@ -334,8 +368,12 @@ def _player_match(book_name: str, our_name: str) -> bool:
 
 
 def best_player_prop(event_odds: dict, market_key: str, player_name: str,
-                     side: str) -> Optional[dict]:
-    """Best price for a player's Over/Under on a market. side='Over'|'Under'."""
+                     side: str, target_point: Optional[float] = None) -> Optional[dict]:
+    """Best price for a player's Over/Under on a market. side='Over'|'Under'.
+
+    If `target_point` is provided, only outcomes whose point exactly matches
+    that line are considered. Use this for CLV snapshots so a half-run line
+    move doesn't get blended into a phantom price-only CLV."""
     if not event_odds:
         return None
     target = side.lower()
@@ -352,6 +390,8 @@ def best_player_prop(event_odds: dict, market_key: str, player_name: str,
                 price = o.get("price")
                 point = o.get("point")
                 if price is None or point is None:
+                    continue
+                if target_point is not None and abs(float(point) - float(target_point)) > 1e-6:
                     continue
                 if best is None or price > best["american"]:
                     best = {
@@ -391,6 +431,7 @@ def attach_prop_edges(prop_list: list, event_odds: dict, stat_type: str,
         prop["book"] = best["book"]
         prop["prop_edge_pct"] = edge_pct(model_p, best["american"])
         prop["prop_ev_pct"] = ev_pct(model_p, best["american"])
+        prop["prop_kelly"] = kelly_units(model_p, best["american"])
         n += 1
     return n
 
@@ -436,6 +477,7 @@ def attach_total_edge(total_lean: dict, game: dict, odds_list: list) -> dict:
         total_lean["pick_odds"] = over_best["american"]
         total_lean["pick_edge_pct"] = total_lean["over_edge_pct"]
         total_lean["pick_ev_pct"] = total_lean["over_ev_pct"]
+        total_lean["pick_kelly"] = kelly_units(p_over, over_best["american"])
         total_lean["probability"] = round(p_over * 100, 1)
     else:
         total_lean["pick"] = f"UNDER {book_line}"
@@ -444,6 +486,7 @@ def attach_total_edge(total_lean: dict, game: dict, odds_list: list) -> dict:
         total_lean["pick_odds"] = under_best["american"]
         total_lean["pick_edge_pct"] = total_lean["under_edge_pct"]
         total_lean["pick_ev_pct"] = total_lean["under_ev_pct"]
+        total_lean["pick_kelly"] = kelly_units(p_under, under_best["american"])
         total_lean["probability"] = round(p_under * 100, 1)
 
     return total_lean
