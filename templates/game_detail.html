@@ -234,14 +234,14 @@
                 <strong>{{ prop.book }}:</strong> {{ prop.pick }} {{ prop.book_line }}
                 @ {{ '+' ~ prop.book_odds if prop.book_odds > 0 else prop.book_odds }}
                 {% if prop.prop_edge_pct is not none %}
-                  · <span style="color:{% if prop.prop_edge_pct >= 5 %}#34d399{% elif prop.prop_edge_pct >= 0 %}#fbbf24{% else %}#fb7185{% endif %}; font-weight:700;">
+                  · <span style="color:{% if prop.prop_edge_pct >= 5 %}#34d399{% elif prop.prop_edge_pct >= 0 %}#fbbf24{% else %}#fb7185{% endif %}; font-weight:700;" title="Edge (percentage points): how much our model's win probability beats the book's implied probability. Green ≥5pp = bet. Yellow 0-5pp = marginal. Red = book has the edge.">
                       {{ '+' if prop.prop_edge_pct >= 0 else '' }}{{ prop.prop_edge_pct }}pp
                   </span>
                   {% if prop.prop_ev_pct is not none %}
-                    <span style="color:#94a3b8;">(EV {{ '+' if prop.prop_ev_pct >= 0 else '' }}{{ prop.prop_ev_pct }}%)</span>
+                    <span style="color:#94a3b8;" title="Expected Value: average return per $100 bet at this price if our model is right. +5% means $5 profit per $100 over the long run.">(EV {{ '+' if prop.prop_ev_pct >= 0 else '' }}{{ prop.prop_ev_pct }}%)</span>
                   {% endif %}
                   {% if prop.prop_kelly is defined and prop.prop_kelly and prop.prop_kelly > 0 %}
-                    <span style="color:#60a5fa; font-weight:700;">· Kelly {{ "%.1f"|format(prop.prop_kelly) }}u</span>
+                    <span style="color:#60a5fa; font-weight:700;" title="Kelly stake (half-Kelly, capped at 5u). The mathematically optimal bet size given our edge and the price. Bigger edge + plus money = bigger Kelly. Long-press / hover for help.">· Kelly {{ "%.1f"|format(prop.prop_kelly) }}u</span>
                   {% endif %}
                 {% endif %}
               </div>
@@ -305,14 +305,14 @@
                         <strong>{{ spread_lean.ml_book }}:</strong>
                         {{ '+' ~ spread_lean.ml_book_odds if spread_lean.ml_book_odds > 0 else spread_lean.ml_book_odds }}
                         {% if spread_lean.ml_edge_pct is not none %}
-                          · <span style="color:{% if spread_lean.ml_edge_pct >= 5 %}#34d399{% elif spread_lean.ml_edge_pct >= 0 %}#fbbf24{% else %}#fb7185{% endif %}; font-weight:700;">
+                          · <span style="color:{% if spread_lean.ml_edge_pct >= 5 %}#34d399{% elif spread_lean.ml_edge_pct >= 0 %}#fbbf24{% else %}#fb7185{% endif %}; font-weight:700;" title="Edge (percentage points): how much our model's win probability beats the book's implied probability. Green ≥5pp = bet. Yellow 0-5pp = marginal. Red = book has the edge.">
                               Edge: {{ '+' if spread_lean.ml_edge_pct >= 0 else '' }}{{ spread_lean.ml_edge_pct }}pp
                           </span>
                           {% if spread_lean.ml_ev_pct is not none %}
-                            <span style="color:#94a3b8; font-size:11px;">(EV {{ '+' if spread_lean.ml_ev_pct >= 0 else '' }}{{ spread_lean.ml_ev_pct }}%)</span>
+                            <span style="color:#94a3b8; font-size:11px;" title="Expected Value: average return per $100 bet at this price if our model is right. +5% means $5 profit per $100 over the long run.">(EV {{ '+' if spread_lean.ml_ev_pct >= 0 else '' }}{{ spread_lean.ml_ev_pct }}%)</span>
                           {% endif %}
                           {% if spread_lean.ml_kelly is defined and spread_lean.ml_kelly and spread_lean.ml_kelly > 0 %}
-                            <span style="color:#60a5fa; font-weight:700; font-size:12px;">· Kelly {{ "%.1f"|format(spread_lean.ml_kelly) }}u</span>
+                            <span style="color:#60a5fa; font-weight:700; font-size:12px;" title="Kelly stake (half-Kelly, capped at 5u). The mathematically optimal bet size given our edge and the price. Bigger edge + plus money = bigger Kelly.">· Kelly {{ "%.1f"|format(spread_lean.ml_kelly) }}u</span>
                           {% endif %}
                           {% if spread_lean.ml_edge_pct >= 15 %}
                             <div style="color:#fbbf24; font-size:11px; margin-top:2px;">⚠️ Edge &gt;15pp — verify line isn't stale</div>
@@ -334,14 +334,14 @@
                         <strong>{{ spread_lean.rl_book }}:</strong>
                         {{ '+' ~ spread_lean.rl_book_odds if spread_lean.rl_book_odds > 0 else spread_lean.rl_book_odds }}
                         {% if spread_lean.rl_edge_pct is not none %}
-                          · <span style="color:{% if spread_lean.rl_edge_pct >= 5 %}#34d399{% elif spread_lean.rl_edge_pct >= 0 %}#fbbf24{% else %}#fb7185{% endif %}; font-weight:700;">
+                          · <span style="color:{% if spread_lean.rl_edge_pct >= 5 %}#34d399{% elif spread_lean.rl_edge_pct >= 0 %}#fbbf24{% else %}#fb7185{% endif %}; font-weight:700;" title="Edge (percentage points): how much our model's win probability beats the book's implied probability. Green ≥5pp = bet. Yellow 0-5pp = marginal. Red = book has the edge.">
                               Edge: {{ '+' if spread_lean.rl_edge_pct >= 0 else '' }}{{ spread_lean.rl_edge_pct }}pp
                           </span>
                           {% if spread_lean.rl_ev_pct is not none %}
-                            <span style="color:#94a3b8; font-size:11px;">(EV {{ '+' if spread_lean.rl_ev_pct >= 0 else '' }}{{ spread_lean.rl_ev_pct }}%)</span>
+                            <span style="color:#94a3b8; font-size:11px;" title="Expected Value: average return per $100 bet at this price if our model is right. +5% means $5 profit per $100 over the long run.">(EV {{ '+' if spread_lean.rl_ev_pct >= 0 else '' }}{{ spread_lean.rl_ev_pct }}%)</span>
                           {% endif %}
                           {% if spread_lean.rl_kelly is defined and spread_lean.rl_kelly and spread_lean.rl_kelly > 0 %}
-                            <span style="color:#60a5fa; font-weight:700; font-size:12px;">· Kelly {{ "%.1f"|format(spread_lean.rl_kelly) }}u</span>
+                            <span style="color:#60a5fa; font-weight:700; font-size:12px;" title="Kelly stake (half-Kelly, capped at 5u). The mathematically optimal bet size given our edge and the price. Bigger edge + plus money = bigger Kelly.">· Kelly {{ "%.1f"|format(spread_lean.rl_kelly) }}u</span>
                           {% endif %}
                           {% if spread_lean.rl_edge_pct >= 15 %}
                             <div style="color:#fbbf24; font-size:11px; margin-top:2px;">⚠️ Edge &gt;15pp — verify line isn't stale</div>
@@ -375,14 +375,14 @@
                         <strong>{{ total_lean.pick_book }}:</strong>
                         {{ '+' ~ total_lean.pick_odds if total_lean.pick_odds > 0 else total_lean.pick_odds }}
                         {% if total_lean.pick_edge_pct is not none %}
-                          · <span style="color:{% if total_lean.pick_edge_pct >= 5 %}#34d399{% elif total_lean.pick_edge_pct >= 0 %}#fbbf24{% else %}#fb7185{% endif %}; font-weight:700;">
+                          · <span style="color:{% if total_lean.pick_edge_pct >= 5 %}#34d399{% elif total_lean.pick_edge_pct >= 0 %}#fbbf24{% else %}#fb7185{% endif %}; font-weight:700;" title="Edge (percentage points): how much our model's win probability beats the book's implied probability. Green ≥5pp = bet. Yellow 0-5pp = marginal. Red = book has the edge.">
                               Edge: {{ '+' if total_lean.pick_edge_pct >= 0 else '' }}{{ total_lean.pick_edge_pct }}pp
                           </span>
                           {% if total_lean.pick_ev_pct is not none %}
-                            <span style="color:#94a3b8; font-size:11px;">(EV {{ '+' if total_lean.pick_ev_pct >= 0 else '' }}{{ total_lean.pick_ev_pct }}%)</span>
+                            <span style="color:#94a3b8; font-size:11px;" title="Expected Value: average return per $100 bet at this price if our model is right. +5% means $5 profit per $100 over the long run.">(EV {{ '+' if total_lean.pick_ev_pct >= 0 else '' }}{{ total_lean.pick_ev_pct }}%)</span>
                           {% endif %}
                           {% if total_lean.pick_kelly is defined and total_lean.pick_kelly and total_lean.pick_kelly > 0 %}
-                            <span style="color:#60a5fa; font-weight:700; font-size:12px;">· Kelly {{ "%.1f"|format(total_lean.pick_kelly) }}u</span>
+                            <span style="color:#60a5fa; font-weight:700; font-size:12px;" title="Kelly stake (half-Kelly, capped at 5u). The mathematically optimal bet size given our edge and the price. Bigger edge + plus money = bigger Kelly.">· Kelly {{ "%.1f"|format(total_lean.pick_kelly) }}u</span>
                           {% endif %}
                         {% endif %}
                     </div>
