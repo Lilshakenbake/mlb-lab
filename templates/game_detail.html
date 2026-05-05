@@ -241,7 +241,15 @@
                     <span style="color:#94a3b8;" title="Expected Value: average return per $100 bet at this price if our model is right. +5% means $5 profit per $100 over the long run.">(EV {{ '+' if prop.prop_ev_pct >= 0 else '' }}{{ prop.prop_ev_pct }}%)</span>
                   {% endif %}
                   {% if prop.prop_kelly is defined and prop.prop_kelly and prop.prop_kelly > 0 %}
-                    <span style="color:#60a5fa; font-weight:700;" title="Kelly stake (half-Kelly, capped at 5u). The mathematically optimal bet size given our edge and the price. Bigger edge + plus money = bigger Kelly. Long-press / hover for help.">· Kelly {{ "%.1f"|format(prop.prop_kelly) }}u</span>
+                    {% set _pre = prop._kelly_pre_ai_prop_kelly %}
+                    <span style="color:#60a5fa; font-weight:700;" title="Kelly stake (half-Kelly, capped at 5u){% if prop.ai_kelly_mult and prop.ai_kelly_mult != 1.0 %} — AI verdict {{ prop.ai_review.verdict }} adjusted from {{ '%.1f'|format(_pre) }}u → {{ '%.1f'|format(prop.prop_kelly) }}u (×{{ '%.2f'|format(prop.ai_kelly_mult) }}){% endif %}. Long-press / hover for help.">· Kelly {{ "%.1f"|format(prop.prop_kelly) }}u</span>
+                    {% if prop.ai_kelly_mult is defined and prop.ai_kelly_mult > 1.0 %}
+                      <span style="color:#34d399; font-size:10px; font-weight:700;" title="AI {{ prop.ai_review.verdict }} boosted Kelly">↑AI</span>
+                    {% elif prop.ai_kelly_mult is defined and prop.ai_kelly_mult < 1.0 %}
+                      <span style="color:#fb7185; font-size:10px; font-weight:700;" title="AI {{ prop.ai_review.verdict }} cut Kelly">↓AI</span>
+                    {% endif %}
+                  {% elif prop.ai_kelly_mult is defined and prop.ai_kelly_mult == 0.0 %}
+                    <span style="color:#fb7185; font-weight:700; font-size:11px;" title="AI FADE — Kelly cut to 0u. Don't bet.">· 🚫 AI FADE</span>
                   {% endif %}
                 {% endif %}
               </div>

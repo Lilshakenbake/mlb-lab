@@ -198,14 +198,62 @@ def review_picks(picks: list[dict], kind: str = "picks") -> dict[str, dict]:
 
 
 def attach_reviews(picks: Iterable[dict], reviews: dict[str, dict]) -> list[dict]:
-    """Mutates and returns the pick list with `ai_review` attached where known."""
+    """Mutates and returns the pick list with `ai_review` attached where known.
+
+    When an AI verdict is present we also adjust any Kelly fields by an
+    AI-based multiplier so the displayed bet size already accounts for the
+    second-opinion. Original pre-AI Kelly is preserved on `_kelly_pre_ai_*`
+    keys for transparency / debugging.
+    """
     out = []
     for p in picks:
         r = reviews.get(_pick_key(p))
         if r:
             p["ai_review"] = r
+            _apply_ai_kelly(p, r)
         out.append(p)
     return out
+
+
+# How aggressively the AI verdict moves bet sizing on top of half-Kelly.
+# Conservative on the upside (we already half-Kelly), strong on the downside
+# so a clear FADE kills the bet entirely. SMASH/PLAY only show up on prop
+# verdicts; AGREE/LEAN/FADE on slate-wide verdicts.
+_AI_KELLY_MULT = {
+    "SMASH": 1.30,
+    "AGREE": 1.25,
+    "PLAY":  1.10,
+    "LEAN":  1.00,
+    "PASS":  0.50,
+    "FADE":  0.00,
+}
+
+_KELLY_FIELDS = ("prop_kelly", "ml_kelly", "rl_kelly", "pick_kelly")
+_KELLY_CAP = 5.0
+
+
+def _apply_ai_kelly(pick: dict, review: dict) -> None:
+    """Mutate any Kelly fields on `pick` by the AI verdict's multiplier.
+
+    No-op if the verdict isn't recognised. Caps the adjusted value at the
+    same 5u ceiling that the base Kelly already enforces."""
+    verdict = str(review.get("verdict", "")).upper()
+    mult = _AI_KELLY_MULT.get(verdict)
+    if mult is None:
+        return
+    pick["ai_kelly_mult"] = mult
+    for f in _KELLY_FIELDS:
+        v = pick.get(f)
+        if v is None:
+            continue
+        try:
+            base = float(v)
+        except (TypeError, ValueError):
+            continue
+        pick[f"_kelly_pre_ai_{f}"] = round(base, 2)
+        adj = max(0.0, min(_KELLY_CAP, base * mult))
+        # Round to one decimal so display matches the existing format.
+        pick[f] = round(adj, 1)
 
 
 def grade_parlay(legs: list[dict]) -> dict:
