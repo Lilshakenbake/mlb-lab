@@ -1249,7 +1249,7 @@ def watchlist():
 @login_required
 def api_grade():
     state = grader.trigger_background_grade(force=True)
-    if request.form:
+    if not request.is_json:
         return redirect(url_for("watchlist"))
     return jsonify(state)
 
@@ -1259,7 +1259,7 @@ def api_grade():
 def api_clv_snap():
     """Manually snapshot closing lines for any tracked play missing them."""
     result = _snap_closing_lines_for_pending()
-    if request.form:
+    if not request.is_json:
         return redirect(url_for("watchlist"))
     return jsonify({"ok": True, **result})
 
@@ -1348,7 +1348,7 @@ def api_odds(play_id):
     if odds_val is None and request.is_json:
         odds_val = (request.get_json(silent=True) or {}).get("odds")
     ok = tracker.update_odds(play_id, odds_val)
-    if request.form:
+    if not request.is_json:
         return redirect(url_for("watchlist"))
     return jsonify({"ok": ok})
 
@@ -1360,7 +1360,7 @@ def api_units(play_id):
     if units_val is None and request.is_json:
         units_val = (request.get_json(silent=True) or {}).get("units")
     ok = tracker.update_units(play_id, units_val)
-    if request.form:
+    if not request.is_json:
         return redirect(url_for("watchlist"))
     return jsonify({"ok": ok})
 
@@ -1382,7 +1382,7 @@ def api_settle(play_id):
     actual_value = request.form.get("actual_value") or (request.get_json(silent=True) or {}).get("actual_value")
     notes = request.form.get("notes") or (request.get_json(silent=True) or {}).get("notes")
     ok = tracker.settle_play(play_id, result, actual_value=actual_value, notes=notes)
-    if request.form:
+    if not request.is_json:
         return redirect(url_for("watchlist"))
     return jsonify({"ok": ok})
 
@@ -1391,7 +1391,7 @@ def api_settle(play_id):
 @login_required
 def api_reopen(play_id):
     ok = tracker.reopen_play(play_id)
-    if request.form:
+    if not request.is_json:
         return redirect(url_for("watchlist"))
     return jsonify({"ok": ok})
 
@@ -1400,7 +1400,7 @@ def api_reopen(play_id):
 @login_required
 def api_untrack(play_id):
     ok = tracker.delete_play(play_id)
-    if request.form:
+    if not request.is_json:
         return redirect(url_for("watchlist"))
     return jsonify({"ok": ok})
 
