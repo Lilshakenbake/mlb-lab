@@ -2,6 +2,7 @@ import math
 
 from src import model as _ml
 from src.park_factors import get_factor as _get_park_factor
+from src.park_factors import get_hr_factor as _get_park_hr_factor
 
 
 # Compass bearing (degrees, 0=N) from home plate to dead center field.
@@ -137,8 +138,14 @@ def compute_hr_threat(hitter_name, hitter_profile, opp_pitcher_name,
     if base <= 0:
         return None
 
-    # Park HR factor.
-    park_hr_f = _get_park_factor(park_name).get("hr", 1.0)
+    # Park HR factor — handedness-aware (Yankees LHB short porch, Fenway RHB
+    # Monster, Oracle LHB triples alley, etc.). Falls back to overall when
+    # batter hand is unknown. Switch hitters resolve via opposing pitcher hand.
+    park_hr_f = _get_park_hr_factor(
+        park_name,
+        hitter_profile.get("hand"),
+        (opp_pitcher_profile or {}).get("hand"),
+    )
     expected = base * park_hr_f
 
     # ── Pitcher power-allowed (NEW: wire in the new pitcher-profile fields) ──
@@ -709,7 +716,17 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
 
     # Multiplicative context factors (zero new HTTP — derived from data we already pull).
     park_key = {"hits": "hits", "total_bases": "tb", "home_runs": "hr", "rbis": "tb"}.get(stat_type, "hits")
-    park_f = _get_park_factor(park_name).get(park_key, 1.0)
+    if stat_type == "home_runs":
+        # Handedness-aware HR park factor (short-porch parks like Yankee Stadium
+        # play 30%+ different for LHB vs RHB). Switch hitters resolve via
+        # opposing pitcher hand.
+        park_f = _get_park_hr_factor(
+            park_name,
+            (hitter_profile or {}).get("hand"),
+            (opp_pitcher_profile or {}).get("hand"),
+        )
+    else:
+        park_f = _get_park_factor(park_name).get(park_key, 1.0)
     k_avg = (opp_pitcher_profile or {}).get("strikeouts_avg")
     pitcher_k_f = _pitcher_k_damper(stat_type, k_avg)
     platoon_f = _platoon_factor(

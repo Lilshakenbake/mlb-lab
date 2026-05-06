@@ -51,6 +51,12 @@ Provides MLB game predictions (hitter props, pitcher strikeouts, spread leans) u
   capped 5u) for ML/RL/Totals/Player props. Player props gated by
   `PROP_ODDS_ENABLED` env var (default 1). 2hr disk cache for game odds,
   12hr per-event cache for props.
+- **Park HR factors (`src/park_factors.py`)**: handedness-split HR factors
+  (`hr_lhb`/`hr_rhb`) for short-porch parks (Yankee LHB 1.40 vs RHB 1.05,
+  Fenway LHB 0.85 vs RHB 1.05, Oracle LHB 0.78, etc.). Helper
+  `get_hr_factor(park, hand)` returns the right value; switch hitters get
+  the better side. Wired into `compute_hr_threat` and `build_hitter_prop`
+  HR path in `src/predict.py`.
 - **Bet tracker (`src/tracker.py`)**: SQLite at `tracked_data/tracked_plays.db`.
   Tracks per-pick odds, units (Kelly-suggested), and CLV (closing-line value).
   CLV columns: `opening_odds`, `opening_book`, `closing_odds`, `closing_book`,
