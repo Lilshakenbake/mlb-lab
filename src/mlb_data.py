@@ -89,10 +89,19 @@ def _lookup_player_id(full_name):
     if full_name in PlayerIdCache:
         return PlayerIdCache[full_name]
 
+    # Positive hits cache for 30d (mlbam ids don't change). Negative ("not
+    # found") results cache for only 24h so a mid-season signing or
+    # mid-offseason trade can't be locked out of the model for a month.
     cached = _cache.get("player_id", full_name, ttl_seconds=30 * 24 * 3600)
     if cached is not None:
-        PlayerIdCache[full_name] = (cached.get("id"), cached.get("error"))
-        return PlayerIdCache[full_name]
+        if cached.get("id") is None:
+            # Negative result — only honor it if it's recent.
+            cached_recent = _cache.get("player_id", full_name, ttl_seconds=24 * 3600)
+            if cached_recent is None:
+                cached = None  # fall through and re-lookup
+        if cached is not None:
+            PlayerIdCache[full_name] = (cached.get("id"), cached.get("error"))
+            return PlayerIdCache[full_name]
 
     first, last = _split_name(full_name)
     if not first or not last:

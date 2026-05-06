@@ -51,6 +51,13 @@ Provides MLB game predictions (hitter props, pitcher strikeouts, spread leans) u
   capped 5u) for ML/RL/Totals/Player props. Player props gated by
   `PROP_ODDS_ENABLED` env var (default 1). 2hr disk cache for game odds,
   12hr per-event cache for props.
+- **Player ID cache TTLs** (`src/mlb_data.py` `_lookup_player_id`):
+  positive ids cached 30d, but **negative ("Player not found") results
+  only honored for 24h** so a mid-season signing or trade can't be locked
+  out for a month. Bug history: a 30d negative TTL caused stars like
+  Altuve, Alvarez, Tatis, Sandy Alcantara, Salvador Perez, Realmuto,
+  Elly De La Cruz to silently vanish from the model. To force-refresh
+  one player, delete `data_cache/player_id/<First_Last>.json`.
 - **HR Threats board** (`app.py`): top 20 hitters by 1+ HR probability.
   Two-pass diversification (top-of-each-game first, then fill by raw
   prob with `HR_THREATS_PER_GAME_CAP=2` per game) prevents
