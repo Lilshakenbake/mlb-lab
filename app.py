@@ -1296,6 +1296,102 @@ def parlay_page():
     return render_template("parlay.html")
 
 
+# ── HR Lotto: combo HR parlay generator ─────────────────────────────────────
+def _american_to_decimal(american) -> float:
+    a = float(american)
+    return 1.0 + (a / 100.0 if a > 0 else 100.0 / abs(a))
+
+
+def _decimal_to_american(d: float) -> int:
+    if d >= 2.0:
+        return int(round((d - 1.0) * 100))
+    return int(round(-100.0 / (d - 1.0)))
+
+
+def _build_hr_lotto(hr_threats, n_legs: int, n_combos: int, top_pool: int = 12):
+    """Generate top HR parlay combos from the current HR threats board.
+
+    One leg per game (no two HRs from the same matchup). Combined probability
+    assumes leg independence (HR events across different games are effectively
+    independent). Combined American odds are computed from the model's
+    `fair_odds` for each leg, so the "fair_american" is the no-vig payout the
+    parlay should pay if the model is right. The "target_american" is +10%
+    over fair, the line you'd need a sportsbook to offer for clear +EV.
+    """
+    from itertools import combinations
+    from math import prod
+
+    pool = sorted(
+        [h for h in hr_threats if h.get("probability") and h.get("fair_odds")],
+        key=lambda x: x["probability"],
+        reverse=True,
+    )[:top_pool]
+
+    out = []
+    for combo in combinations(pool, n_legs):
+        gpks = [c.get("game_pk") for c in combo]
+        # Drop combos with two legs in the same game (correlated outcomes,
+        # books often won't even allow it on HR props).
+        if len([g for g in gpks if g is not None]) != len(set(g for g in gpks if g is not None)):
+            continue
+        prob = prod((c["probability"] or 0) / 100.0 for c in combo)
+        if prob <= 0:
+            continue
+        dec = prod(_american_to_decimal(c["fair_odds"]) for c in combo)
+        out.append({
+            "legs": [{
+                "player": c.get("player"),
+                "matchup": c.get("matchup"),
+                "vs": c.get("vs"),
+                "park": c.get("park"),
+                "probability": c.get("probability"),
+                "fair_odds": c.get("fair_odds"),
+                "game_pk": c.get("game_pk"),
+            } for c in combo],
+            "n_legs": n_legs,
+            "combined_prob": round(prob * 100, 2),
+            "fair_american": _decimal_to_american(dec),
+            # HR props carry ~25% vig per leg, so multiply by 1.25 to get a
+            # market-realistic +EV target (anything ABOVE this number at the
+            # book is true +EV; +10% would be invisible at any real sportsbook).
+            "target_american": _decimal_to_american(dec * 1.25),
+            "fair_decimal": round(dec, 2),
+            "ev_units": round(prob * dec - 1.0, 2),  # EV at fair odds = 0; >0 means +EV vs fair
+        })
+
+    # Safest first for short combos; juiciest payout first for the lotto.
+    if n_legs >= 5:
+        out.sort(key=lambda x: x["fair_decimal"], reverse=True)
+    else:
+        out.sort(key=lambda x: x["combined_prob"], reverse=True)
+    return out[:n_combos]
+
+
+@app.route("/hr-lotto", methods=["GET"])
+@login_required
+def hr_lotto_page():
+    return render_template("hr_lotto.html")
+
+
+@app.route("/api/hr-lotto", methods=["GET"])
+@login_required
+def api_hr_lotto():
+    """HR parlay combos: 5x 2-leg, 5x 3-leg, 3x 5-leg lotto."""
+    _ensure_plays_refresh()
+    with _PLAYS_LOCK:
+        hr = list(HR_THREATS_CACHE["data"])
+        ts = HR_THREATS_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+    return jsonify({
+        "two_leg": _build_hr_lotto(hr, 2, 5),
+        "three_leg": _build_hr_lotto(hr, 3, 5),
+        "lotto_five": _build_hr_lotto(hr, 5, 3),
+        "ts": ts,
+        "computing": computing,
+        "pool_size": len(hr),
+    })
+
+
 @app.route("/api/parlay/grade", methods=["POST"])
 @login_required
 def api_parlay_grade():

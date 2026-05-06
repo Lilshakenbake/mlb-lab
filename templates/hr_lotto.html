@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HR Lotto · MLB Lab</title>
+<style>
+    body { background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:0; }
+    .container { max-width:780px; margin:0 auto; padding:18px 14px 80px; }
+    h1 { font-size:22px; margin:6px 0 2px; text-align:center; }
+    h2 { font-size:18px; margin:18px 0 8px; }
+    .sub { color:#94a3b8; font-size:13px; margin:0 0 16px; text-align:center; }
+    .topnav { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:13px; }
+    .topnav a { color:#93c5fd; text-decoration:none; font-weight:600; }
+    .section-sub { color:#94a3b8; font-size:12px; margin:-4px 0 8px; }
+    .combo-card {
+        background:#1e293b; border:1px solid #334155; border-radius:12px;
+        padding:12px; margin-bottom:10px;
+    }
+    .combo-header {
+        display:flex; justify-content:space-between; align-items:flex-start;
+        gap:10px; margin-bottom:8px; flex-wrap:wrap;
+    }
+    .combo-title { font-size:14px; font-weight:700; color:#fde68a; }
+    .combo-payout {
+        font-size:18px; font-weight:800; color:#34d399;
+        font-variant-numeric:tabular-nums;
+    }
+    .combo-prob {
+        display:inline-block; padding:3px 8px; border-radius:999px;
+        background:#1e3a8a; color:#bfdbfe; font-size:11px; font-weight:700;
+        margin-right:6px;
+    }
+    .combo-target {
+        font-size:11px; color:#94a3b8; margin-top:4px;
+    }
+    .combo-target b { color:#fbbf24; }
+    .leg {
+        background:#0f172a; border-left:3px solid #3b82f6;
+        padding:7px 10px; margin:5px 0; border-radius:4px; font-size:13px;
+    }
+    .leg .player { font-weight:700; color:#e2e8f0; }
+    .leg .meta { color:#94a3b8; font-size:11px; margin-top:2px; }
+    .leg .leg-odds {
+        float:right; color:#fbbf24; font-weight:700;
+        font-variant-numeric:tabular-nums;
+    }
+    .lotto .combo-payout { color:#fbbf24; font-size:22px; }
+    .lotto { border-color:#b45309; background:#1f1408; }
+    .empty {
+        text-align:center; color:#94a3b8; padding:30px 12px;
+        background:#1e293b; border-radius:12px; border:1px dashed #334155;
+    }
+    .legend {
+        background:#1e293b; border:1px solid #334155; border-radius:10px;
+        padding:10px 12px; margin-bottom:14px; font-size:12px; color:#cbd5e1; line-height:1.5;
+    }
+    .legend b { color:#fde68a; }
+    .refresh {
+        font-size:11px; color:#64748b; text-align:right; margin-top:4px;
+    }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="topnav">
+        <a href="/">← Slate</a>
+        <a href="/parlay">Parlay Builder</a>
+        <a href="/watchlist">Watchlist</a>
+    </div>
+
+    <h1>🎰 HR Lotto</h1>
+    <p class="sub">Best home run parlays from tonight's threat board</p>
+
+    <div class="legend">
+        <b>How to read it:</b> Combined % is the model's true probability.
+        Fair payout is what the parlay <i>should</i> pay (no vig). HR props
+        are heavily juiced (~25% vig per leg), so the <b>Target</b> line is
+        what you actually need from a sportsbook to clear true +EV.
+        One leg per game (no same-game HRs).
+    </div>
+
+    <div class="refresh" id="refresh-status"></div>
+
+    <h2>🎯 2-Leg HR Parlays</h2>
+    <div class="section-sub">Top 5 by combined probability — safer plays</div>
+    <div id="two-leg"></div>
+
+    <h2>🔥 3-Leg HR Parlays</h2>
+    <div class="section-sub">Top 5 by combined probability — sweet spot for HR parlays</div>
+    <div id="three-leg"></div>
+
+    <h2>💎 5-Leg Lotto</h2>
+    <div class="section-sub">Top 3 by payout — lottery tickets, juiciest combined odds</div>
+    <div id="lotto-five"></div>
+</div>
+
+<script>
+const fmtAmer = (n) => n > 0 ? `+${n}` : `${n}`;
+const escape = (s) => String(s ?? "").replace(/[<>&"']/g, c => ({
+    "<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;","'":"&#39;"
+}[c]));
+
+const renderLeg = (leg) => `
+    <div class="leg">
+        <span class="leg-odds">${fmtAmer(leg.fair_odds)}</span>
+        <div class="player">${escape(leg.player)} <span style="color:#94a3b8; font-weight:400; font-size:11px;">(${(leg.probability || 0).toFixed(1)}%)</span></div>
+        <div class="meta">vs ${escape(leg.vs || "TBD")} · ${escape(leg.matchup || "")}</div>
+    </div>`;
+
+const renderCombo = (c, isLotto) => `
+    <div class="combo-card ${isLotto ? "lotto" : ""}">
+        <div class="combo-header">
+            <div>
+                <span class="combo-prob">${c.combined_prob.toFixed(2)}% true</span>
+                <span class="combo-title">${c.n_legs}-leg HR parlay</span>
+            </div>
+            <div style="text-align:right;">
+                <div class="combo-payout">${fmtAmer(c.fair_american)}</div>
+                <div class="combo-target">Target: <b>${fmtAmer(c.target_american)}</b> or better for +EV</div>
+            </div>
+        </div>
+        ${c.legs.map(renderLeg).join("")}
+    </div>`;
+
+async function loadLotto() {
+    const status = document.getElementById("refresh-status");
+    try {
+        const res = await fetch("/api/hr-lotto");
+        const data = await res.json();
+
+        const renderSection = (id, combos, isLotto) => {
+            const el = document.getElementById(id);
+            if (!combos || !combos.length) {
+                el.innerHTML = `<div class="empty">${data.computing ? "⏳ Computing tonight's slate… refresh in a minute." : "No HR threats available."}</div>`;
+                return;
+            }
+            el.innerHTML = combos.map(c => renderCombo(c, isLotto)).join("");
+        };
+
+        renderSection("two-leg", data.two_leg, false);
+        renderSection("three-leg", data.three_leg, false);
+        renderSection("lotto-five", data.lotto_five, true);
+
+        if (data.computing) {
+            status.textContent = `⏳ Slate still computing… (pool: ${data.pool_size || 0} threats)`;
+            setTimeout(loadLotto, 15000);
+        } else if (data.ts) {
+            const age = Math.round((Date.now()/1000 - data.ts) / 60);
+            status.textContent = `Updated ${age}m ago · pool: ${data.pool_size || 0} threats`;
+        }
+    } catch (e) {
+        status.textContent = `Error loading: ${e}`;
+    }
+}
+
+loadLotto();
+</script>
+</body>
+</html>
