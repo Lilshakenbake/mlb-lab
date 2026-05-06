@@ -51,6 +51,11 @@ Provides MLB game predictions (hitter props, pitcher strikeouts, spread leans) u
   capped 5u) for ML/RL/Totals/Player props. Player props gated by
   `PROP_ODDS_ENABLED` env var (default 1). 2hr disk cache for game odds,
   12hr per-event cache for props.
+- **HR Threats board** (`app.py`): top 20 hitters by 1+ HR probability.
+  Two-pass diversification (top-of-each-game first, then fill by raw
+  prob with `HR_THREATS_PER_GAME_CAP=2` per game) prevents
+  Coors/Yankee-Rangers eating the whole board. Tunable via env vars
+  `HR_THREATS_LIMIT` and `HR_THREATS_PER_GAME_CAP`.
 - **Park HR factors (`src/park_factors.py`)**: handedness-split HR factors
   (`hr_lhb`/`hr_rhb`) for short-porch parks (Yankee LHB 1.40 vs RHB 1.05,
   Fenway LHB 0.85 vs RHB 1.05, Oracle LHB 0.78, etc.). Helper

@@ -57,7 +57,8 @@ SPECIALS_CACHE = {"ts": 0, "data": {
     "hr_pair": None,
     "bases_parlay": None,
 }}
-HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "12"))
+HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "20"))
+HR_THREATS_PER_GAME_CAP = int(os.getenv("HR_THREATS_PER_GAME_CAP", "2"))
 HRR_COMBO_CACHE = {"ts": 0, "data": []}
 HRR_COMBO_LIMIT = int(os.getenv("HRR_COMBO_LIMIT", "12"))
 # Locks: top N highest-probability single plays across the WHOLE slate,
@@ -897,7 +898,32 @@ def _refresh_plays_blocking():
                 PLAYS_CACHE["ts"] = time.time()
                 PLAYS_CACHE["data"] = diversified
                 HR_THREATS_CACHE["ts"] = time.time()
-                HR_THREATS_CACHE["data"] = sorted_hr[:HR_THREATS_LIMIT]
+                # Diversify HR threats so one slugger-heavy matchup doesn't
+                # eat half the board. Two-pass: top-of-game first, then fill
+                # by raw probability with a per-game cap. Same pattern as
+                # the Plays of the Day diversification above.
+                hr_diversified = []
+                hr_seen_ids: set[int] = set()
+                hr_game_counts: dict = {}
+                for h in sorted_hr:
+                    gpk_h = h.get("game_pk")
+                    if gpk_h is None or gpk_h in hr_game_counts:
+                        continue
+                    hr_diversified.append(h)
+                    hr_seen_ids.add(id(h))
+                    hr_game_counts[gpk_h] = 1
+                for h in sorted_hr:
+                    if id(h) in hr_seen_ids:
+                        continue
+                    gpk_h = h.get("game_pk")
+                    if gpk_h is not None and hr_game_counts.get(gpk_h, 0) >= HR_THREATS_PER_GAME_CAP:
+                        continue
+                    hr_diversified.append(h)
+                    hr_seen_ids.add(id(h))
+                    hr_game_counts[gpk_h] = hr_game_counts.get(gpk_h, 0) + 1
+                    if len(hr_diversified) >= HR_THREATS_LIMIT:
+                        break
+                HR_THREATS_CACHE["data"] = hr_diversified[:HR_THREATS_LIMIT]
                 NRFI_CACHE["ts"] = time.time()
                 NRFI_CACHE["data"] = sorted_nrfi
                 HRR_COMBO_CACHE["ts"] = time.time()
