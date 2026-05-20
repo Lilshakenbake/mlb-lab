@@ -1485,6 +1485,10 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
                 continue
             seen_signatures.add(sig)
             payout = stake * dec
+            # Expected value: (P(win) × profit) − (P(loss) × stake).
+            # Edge %: EV as a percentage of stake (positive = +EV bet).
+            ev = prob * (payout - stake) - (1 - prob) * stake
+            edge_pct = (ev / stake) * 100 if stake > 0 else 0
             out.append({
                 "n_legs": n,
                 "legs": [{
@@ -1502,6 +1506,8 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
                 "stake": round(stake, 2),
                 "payout": round(payout, 2),
                 "profit": round(payout - stake, 2),
+                "expected_value": round(ev, 2),
+                "edge_pct": round(edge_pct, 2),
             })
             n_added += 1
         # Early exit: once we have enough combos from smaller leg counts, stop

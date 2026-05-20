@@ -1,0 +1,190 @@
+/* MLB Lab — sleek design system.
+   Loaded AFTER each page's inline <style> so these tokens win.
+   Per-page rules can still override anything below. */
+
+:root {
+    --bg: #060b1a;
+    --bg-2: #0a1124;
+    --panel: #131a2e;
+    --panel-2: #1a2340;
+    --border: #283253;
+    --border-hi: #3a4778;
+    --text: #e8edff;
+    --muted: #8b97bd;
+    --accent: #38bdf8;
+    --accent-2: #818cf8;
+    --good: #34d399;
+    --gold: #fbbf24;
+    --purple: #a78bfa;
+    --danger: #fb7185;
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.25);
+    --shadow-md: 0 6px 22px rgba(0, 0, 0, 0.35);
+    --shadow-glow: 0 0 0 1px rgba(56, 189, 248, 0.18), 0 8px 28px rgba(56, 189, 248, 0.08);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    background: radial-gradient(1200px 600px at 50% -120px, #1a2340 0%, transparent 60%), linear-gradient(180deg, #060b1a 0%, #0a1124 100%) !important;
+    color: var(--text) !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif !important;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Headings */
+h1 { font-size: 26px !important; letter-spacing: -0.5px; font-weight: 800; }
+h2 { letter-spacing: -0.3px; font-weight: 700; }
+h3 { letter-spacing: -0.2px; font-weight: 700; }
+
+.sub { color: var(--muted) !important; }
+
+/* Cards everywhere */
+.card,
+.stat-card,
+.combo-card,
+.calibration,
+.legend,
+.grade-bar,
+.stat-box {
+    background: var(--panel) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 14px !important;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.card:hover,
+.combo-card:hover,
+.stat-card:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--border-hi) !important;
+}
+
+/* Hero/lock band */
+.hero-locks {
+    background: linear-gradient(135deg, #0f3a3a 0%, #1e1b4b 100%) !important;
+    border: 1px solid #2dd4bf33 !important;
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 18px;
+    box-shadow: var(--shadow-md);
+}
+
+/* Nav pills (used on index) */
+.nav-pills a,
+.topnav a {
+    background: var(--panel-2) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-weight: 600;
+    transition: all 0.15s ease;
+    text-decoration: none;
+}
+.nav-pills a:hover,
+.topnav a:hover {
+    background: var(--border) !important;
+    border-color: var(--accent);
+    color: var(--accent) !important;
+}
+
+/* Sticky bottom nav on index keeps glassy feel */
+.bottom-nav,
+.nav-pills.sticky,
+.sticky-nav {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(10, 17, 36, 0.85) !important;
+    border-top: 1px solid var(--border) !important;
+}
+
+/* Buttons */
+a.button-link,
+.btn,
+button.btn {
+    background: linear-gradient(135deg, var(--accent), #0ea5e9) !important;
+    color: #04101f !important;
+    border: none !important;
+    border-radius: 12px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0.2px;
+    box-shadow: 0 4px 14px rgba(56, 189, 248, 0.25);
+    transition: filter 0.15s ease, transform 0.05s ease;
+}
+a.button-link:hover,
+.btn:hover { filter: brightness(1.1); }
+a.button-link:active,
+.btn:active { transform: translateY(1px); }
+.btn.secondary {
+    background: var(--panel-2) !important;
+    color: var(--text) !important;
+    box-shadow: none;
+}
+.btn.ghost {
+    background: transparent !important;
+    color: var(--accent) !important;
+    border: 1px solid var(--border) !important;
+    box-shadow: none;
+}
+
+/* Inputs */
+input[type=text], input[type=number], input[type=password], select, textarea {
+    background: var(--bg-2) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    padding: 10px 12px !important;
+    font-size: 14px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+input:focus, select:focus, textarea:focus {
+    outline: none !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+}
+
+/* Tables */
+table {
+    background: var(--panel) !important;
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+}
+th { background: var(--bg-2) !important; color: var(--muted) !important; }
+th, td { border-bottom: 1px solid var(--border) !important; }
+tr:hover td { background: rgba(56, 189, 248, 0.04); }
+
+/* Pills get a softer modern look */
+.pill,
+.badge {
+    border-radius: 999px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+/* Scrollbar (webkit) */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+
+/* Selection */
+::selection { background: rgba(56, 189, 248, 0.3); color: var(--text); }
+
+/* Empty-state polish */
+.empty {
+    border: 1px dashed var(--border) !important;
+    border-radius: 12px;
+    color: var(--muted) !important;
+}
+
+/* Mobile tweaks */
+@media (max-width: 540px) {
+    .container { padding: 14px 12px 90px !important; }
+    h1 { font-size: 22px !important; }
+    .games-grid { grid-template-columns: 1fr !important; }
+}

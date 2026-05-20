@@ -199,6 +199,7 @@
     }
     .complete-banner h2 { color: var(--good); margin: 0 0 4px; font-size: 22px; }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/sleek.css') }}">
 </head>
 <body>
 <div class="container">
@@ -282,7 +283,11 @@ function load() {
 }
 
 const fmtAmer = (n) => n > 0 ? `+${n}` : `${n}`;
-const fmtMoney = (n) => `$${Number(n).toFixed(2)}`;
+const fmtMoney = (n) => {
+    const v = Number(n);
+    // Sub-dollar amounts show 2 decimals as cents-friendly; everything else $X.XX
+    return `$${v.toFixed(2)}`;
+};
 const escape = (s) => String(s ?? "").replace(/[<>&"']/g, c => ({
     "<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;","'":"&#39;"
 }[c]));
@@ -443,6 +448,11 @@ function renderCombo(c, featured) {
                 <div class="combo-stat"><div class="lbl">Stake</div><div class="v">${fmtMoney(c.stake)}</div></div>
                 <div class="combo-stat"><div class="lbl">Payout</div><div class="v gold">${fmtMoney(c.payout)}</div></div>
                 <div class="combo-stat"><div class="lbl">Odds</div><div class="v good">${fmtAmer(c.combined_american)}</div></div>
+            </div>
+            <div class="combo-stats" style="margin-top:-4px;">
+                <div class="combo-stat"><div class="lbl">Expected Win</div><div class="v ${c.expected_value >= 0 ? "good" : ""}" style="${c.expected_value < 0 ? "color:var(--danger);" : ""}">${c.expected_value >= 0 ? "+" : ""}${fmtMoney(c.expected_value)}</div></div>
+                <div class="combo-stat"><div class="lbl">Edge</div><div class="v ${c.edge_pct >= 0 ? "good" : ""}" style="${c.edge_pct < 0 ? "color:var(--danger);" : ""}">${c.edge_pct >= 0 ? "+" : ""}${c.edge_pct.toFixed(1)}%</div></div>
+                <div class="combo-stat"><div class="lbl">Hit Rate</div><div class="v">${c.combined_prob.toFixed(1)}%</div></div>
             </div>
             ${legsHtml}
             <div class="actions">
