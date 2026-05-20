@@ -1406,22 +1406,25 @@ def _is_game_bettable(game_info: dict, lead_min: int = 0) -> bool:
     default to True (don't hide picks for missing data)."""
     import datetime as _dt
     status = (game_info.get("status") or "").lower()
-    # Status strings from MLB stats API that mean "no longer bettable":
-    bad = ("final", "game over", "in progress", "live", "completed early",
-           "delayed", "postponed", "suspended")
-    if any(b in status for b in bad):
+    # Only TERMINAL states are unbettable. In-progress / live / delayed
+    # games are kept in the pool because sportsbooks offer live betting
+    # and live parlays on them.
+    terminal = ("final", "game over", "completed early", "postponed",
+                "cancelled", "canceled")
+    if any(t in status for t in terminal):
         return False
+    # Pre-game (Scheduled, Pre-Game, Warmup) → must still be near/before
+    # first pitch. In-progress states fall through and are bettable.
+    in_progress_markers = ("in progress", "live", "manager challenge",
+                            "delayed", "suspended", "review", "umpire review")
+    if any(m in status for m in in_progress_markers):
+        return True
     gt = game_info.get("game_time")
     if not gt:
-        return True  # unknown start — let it through
+        return True  # unknown start, non-terminal status — let it through
     try:
-        # game_time is ISO with trailing Z (UTC).
         when = _dt.datetime.fromisoformat(gt.replace("Z", "+00:00"))
         now = _dt.datetime.now(_dt.timezone.utc)
-        # Bettable until first pitch. Books usually take bets through warmup
-        # right up to game time; status flips to "In Progress" at first
-        # pitch which is caught above. lead_min defaults to 0 — only positive
-        # values restrict further.
         return when >= now + _dt.timedelta(minutes=lead_min)
     except Exception:
         return True
@@ -1660,8 +1663,8 @@ def api_challenge():
     }
     if not pool:
         if live_only and games_total > 0 and games_bettable == 0:
-            msg = (f"Tonight's slate is done — {games_total} games already "
-                   f"finished or in progress. Tomorrow's games post in the morning.")
+            msg = (f"Tonight's slate is done — all {games_total} games "
+                   f"finished. Tomorrow's games post in the morning.")
         elif live_only and games_total > 0:
             msg = (f"Only {games_bettable} of {games_total} games still bettable, "
                    f"and the model hasn't built picks for them yet. Try again "
