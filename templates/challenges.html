@@ -399,6 +399,9 @@ function renderNowStatus(data, stake, target, liveOnly) {
     }
     const ctx = data.context || {};
     const ra = ctx.required_american || 0;
+    const gameInfo = liveOnly && ctx.games_total
+        ? ` · ${ctx.games_bettable}/${ctx.games_total} games still open`
+        : (liveOnly ? "" : " · all of today's slate");
     panel.innerHTML = `
         <div class="card">
             <h2>${fmtMoney(stake)} → ${fmtMoney(target)} ${difficultyBadge(ra)}</h2>
@@ -408,8 +411,7 @@ function renderNowStatus(data, stake, target, liveOnly) {
                 <div class="stat"><div class="label">Min line</div><div class="val good">${fmtAmer(ra)}</div></div>
             </div>
             <div style="font-size:11px; color:var(--muted); text-align:center;">
-                pool: ${ctx.pool_size || 0} picks
-                ${liveOnly ? " · 🔴 live games only" : " · including all of today's slate"}
+                pool: ${ctx.pool_size || 0} picks${gameInfo}
                 ${data.computing ? " · ⏳ slate still computing" : ""}
             </div>
         </div>`;
@@ -566,11 +568,15 @@ function renderCombos(data) {
     if (!data.ok) { el.innerHTML = ""; return; }
     const combos = data.combos || [];
     if (!combos.length) {
-        el.innerHTML = `<div class="empty">
-            ${data.computing
-                ? "⏳ Slate is still computing. Try again in about a minute."
-                : "No combos can hit this rung's target. Try making your ladder less steep, or give yourself more days."}
-        </div>`;
+        // Prefer the backend's specific message (slate-done, computing, etc.).
+        // Fall back to a generic hint depending on which mode we're in.
+        const ctx = data.context || {};
+        let msg;
+        if (data.message) msg = escape(data.message);
+        else if (data.computing) msg = "⏳ Slate is still computing. Try again in about a minute.";
+        else if (ctx.live_only) msg = "No bettable games right now. Uncheck \"Live games only\" to see what was on today's full slate.";
+        else msg = "Target's a bit steep for tonight's pool. Try a lower target or more days.";
+        el.innerHTML = `<div class="empty">${msg}</div>`;
         return;
     }
     el.innerHTML = combos.map((c, i) => renderCombo(c, i === 0)).join("");

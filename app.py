@@ -1377,21 +1377,16 @@ def hr_lotto_page():
 def _load_today_schedule_status() -> dict:
     """Return {game_pk: {"game_time": iso, "status": str}} for today's slate.
 
-    Reads the cached schedule JSON for today's local date. Returns {} if the
-    file is missing — callers should treat that as "no filter info available".
+    Uses src.mlb_data.get_todays_games() which (a) computes "today" in
+    Eastern time — matching MLB's day boundary, not UTC — and (b) fetches
+    on cache miss so we always get fresh status info.
+    Returns {} only on hard failure (network down, etc.).
     """
-    import datetime as _dt
-    import json as _json
-    from pathlib import Path as _Path
-    cache_dir = os.getenv("MLB_CACHE_DIR", "data_cache")
-    today = _dt.datetime.now().strftime("%Y-%m-%d")
-    path = _Path(cache_dir) / "schedule" / f"{today}.json"
-    if not path.exists():
-        return {}
     try:
-        raw = _json.loads(path.read_text())
+        from src.mlb_data import get_todays_games
+        games = get_todays_games() or []
         out = {}
-        for g in raw.get("data", []):
+        for g in games:
             gpk = g.get("gamePk") or g.get("game_pk")
             if gpk is None:
                 continue
@@ -1400,7 +1395,8 @@ def _load_today_schedule_status() -> dict:
                 "status": g.get("status", ""),
             }
         return out
-    except Exception:
+    except Exception as e:
+        print(f"[challenge] schedule load failed: {e}")
         return {}
 
 
@@ -1483,9 +1479,19 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
                 "source": "hrr",
             })
     # Live-only filter: drop picks whose game has started or completed.
-    if live_only and sched:
-        pool = [p for p in pool
-                if _is_game_bettable(sched.get(p.get("game_pk"), {}))]
+    # Fail CLOSED when schedule data is missing — better to show zero picks
+    # than to surface picks for games that already finished. The empty-state
+    # message tells the user to uncheck "Live games only" if they want all.
+    if live_only:
+        if not sched:
+            pool = []
+        else:
+            # Per-pick fail-closed: if a pick's game_pk isn't in today's
+            # schedule (stale cache, mismatched ID, etc.) drop it — better
+            # than letting an unverifiable pick leak through.
+            pool = [p for p in pool
+                    if p.get("game_pk") in sched
+                    and _is_game_bettable(sched[p.get("game_pk")])]
     # De-dupe: same player + same game (HR + HRR for the same hitter) — keep
     # highest probability variant per (player, game) so we don't stack
     # correlated legs on the same hitter.
@@ -1624,35 +1630,54 @@ def api_challenge():
     _ensure_plays_refresh()
     live_only = bool(body.get("live_only", False))
     pool = _gather_pool(live_only=live_only)
+
+    # Surface how many games are still bettable so the UI can explain an
+    # empty pool ("0 of 15 games still open — tomorrow's slate posts in
+    # the morning") instead of confusing the user.
+    games_total = 0
+    games_bettable = 0
+    if live_only:
+        sched = _load_today_schedule_status()
+        games_total = len(sched)
+        games_bettable = sum(1 for v in sched.values() if _is_game_bettable(v))
+
+    base_ctx = {
+        "bankroll": bankroll,
+        "target": target,
+        "profit_needed": round(profit_needed, 2),
+        "days_left": days_left,
+        "needed_today": round(needed_today, 2),
+        "pool_size": len(pool),
+        "required_american": _decimal_to_american(
+            (bankroll + needed_today) / bankroll
+        ),
+        "live_only": live_only,
+        "games_total": games_total,
+        "games_bettable": games_bettable,
+    }
     if not pool:
+        if live_only and games_total > 0 and games_bettable == 0:
+            msg = (f"Tonight's slate is done — {games_total} games already "
+                   f"finished or in progress. Tomorrow's games post in the morning.")
+        elif live_only and games_total > 0:
+            msg = (f"Only {games_bettable} of {games_total} games still bettable, "
+                   f"and the model hasn't built picks for them yet. Try again "
+                   f"in ~1 minute.")
+        else:
+            msg = "Slate still computing — try again in ~1 minute."
         return jsonify({
             "ok": True,
             "computing": PLAYS_CACHE["computing"],
-            "message": "Slate still computing — try again in ~1 minute.",
+            "message": msg,
             "combos": [],
-            "context": {
-                "bankroll": bankroll, "target": target,
-                "profit_needed": round(profit_needed, 2),
-                "days_left": days_left, "needed_today": round(needed_today, 2),
-                "pool_size": 0,
-            },
+            "context": base_ctx,
         })
 
     combos = _solve_challenge(pool, bankroll, needed_today)
     return jsonify({
         "ok": True,
         "computing": PLAYS_CACHE["computing"],
-        "context": {
-            "bankroll": bankroll,
-            "target": target,
-            "profit_needed": round(profit_needed, 2),
-            "days_left": days_left,
-            "needed_today": round(needed_today, 2),
-            "pool_size": len(pool),
-            "required_american": _decimal_to_american(
-                (bankroll + needed_today) / bankroll
-            ),
-        },
+        "context": base_ctx,
         "combos": combos,
     })
 
