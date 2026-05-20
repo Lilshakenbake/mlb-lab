@@ -1393,12 +1393,16 @@ def _load_today_schedule_status() -> dict:
             out[gpk] = {
                 "game_time": g.get("game_time"),
                 "status": g.get("status", ""),
+                "current_inning": g.get("current_inning"),
+                "inning_state": g.get("inning_state"),
             }
         return out
     except Exception as e:
         print(f"[challenge] schedule load failed: {e}")
         return {}
 
+
+LATE_INNING_CUTOFF = 7  # games in 7th inning or later are no longer bettable
 
 def _is_game_bettable(game_info: dict, lead_min: int = 0) -> bool:
     """A game is bettable if it hasn't started (with a small lead time) AND
@@ -1408,7 +1412,7 @@ def _is_game_bettable(game_info: dict, lead_min: int = 0) -> bool:
     status = (game_info.get("status") or "").lower()
     # Only TERMINAL states are unbettable. In-progress / live / delayed
     # games are kept in the pool because sportsbooks offer live betting
-    # and live parlays on them.
+    # and live parlays on them — EXCEPT past the late-inning cutoff.
     terminal = ("final", "game over", "completed early", "postponed",
                 "cancelled", "canceled")
     if any(t in status for t in terminal):
@@ -1418,6 +1422,11 @@ def _is_game_bettable(game_info: dict, lead_min: int = 0) -> bool:
     in_progress_markers = ("in progress", "live", "manager challenge",
                             "delayed", "suspended", "review", "umpire review")
     if any(m in status for m in in_progress_markers):
+        # Cut off live games once they reach the 7th inning — too few outs
+        # left for player props (esp. hits/HR/TB/RBI) to develop.
+        inning = game_info.get("current_inning")
+        if isinstance(inning, int) and inning >= LATE_INNING_CUTOFF:
+            return False
         return True
     gt = game_info.get("game_time")
     if not gt:

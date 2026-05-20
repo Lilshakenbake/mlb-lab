@@ -140,7 +140,7 @@ def get_todays_games():
     params = {
         "sportId": 1,
         "date": today,
-        "hydrate": "probablePitcher,team"
+        "hydrate": "probablePitcher,team,linescore"
     }
 
     response = requests.get(url, params=params, timeout=30)
@@ -153,6 +153,7 @@ def get_todays_games():
         for game in date_block.get("games", []):
             away = game["teams"]["away"]
             home = game["teams"]["home"]
+            ls = game.get("linescore") or {}
 
             games.append({
                 "gamePk": game.get("gamePk"),
@@ -164,6 +165,8 @@ def get_todays_games():
                 "home_pitcher": home.get("probablePitcher", {}).get("fullName", "TBD"),
                 "game_time": game.get("gameDate", ""),
                 "status": game["status"]["detailedState"],
+                "current_inning": ls.get("currentInning"),
+                "inning_state": ls.get("inningState"),
             })
 
     games.sort(key=lambda g: g.get("game_time", ""))
