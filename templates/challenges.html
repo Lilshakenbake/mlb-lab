@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Challenges · MLB Lab</title>
+<style>
+    :root {
+        --bg: #0a0f1e;
+        --panel: #131a2e;
+        --panel-2: #1a2340;
+        --border: #283253;
+        --text: #e6ecff;
+        --muted: #8593b8;
+        --accent: #38bdf8;
+        --good: #34d399;
+        --gold: #fbbf24;
+        --danger: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    body {
+        background: linear-gradient(180deg, #050816 0%, #0a0f1e 100%);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0; padding: 0; min-height: 100vh;
+    }
+    .container { max-width: 780px; margin: 0 auto; padding: 18px 14px 100px; }
+    .topnav {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 14px; font-size: 13px;
+    }
+    .topnav a { color: var(--accent); text-decoration: none; font-weight: 600; }
+
+    .hero {
+        background: linear-gradient(135deg, #1e3a8a 0%, #581c87 100%);
+        border-radius: 18px; padding: 22px 18px; margin-bottom: 16px;
+        box-shadow: 0 8px 28px rgba(88, 28, 135, 0.35);
+        position: relative; overflow: hidden;
+    }
+    .hero::after {
+        content: "💰"; position: absolute; right: -10px; bottom: -20px;
+        font-size: 120px; opacity: 0.08;
+    }
+    .hero h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.5px; }
+    .hero p { margin: 0; font-size: 13px; opacity: 0.85; }
+
+    .card {
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 14px; padding: 16px; margin-bottom: 14px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    .card h2 { font-size: 16px; margin: 0 0 12px; color: var(--accent); }
+
+    .form-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    }
+    .form-grid .full { grid-column: 1 / -1; }
+    label { display: block; font-size: 11px; color: var(--muted);
+        letter-spacing: 0.5px; text-transform: uppercase;
+        margin-bottom: 6px; font-weight: 600; }
+    input[type=number] {
+        width: 100%; background: var(--bg); color: var(--text);
+        border: 1px solid var(--border); border-radius: 10px;
+        padding: 12px 14px; font-size: 16px; font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    input[type=number]:focus { outline: none; border-color: var(--accent); }
+
+    .btn {
+        background: linear-gradient(135deg, var(--accent), #0ea5e9);
+        color: #04101f; border: none; border-radius: 12px;
+        padding: 14px; font-weight: 800; font-size: 15px;
+        cursor: pointer; width: 100%; letter-spacing: 0.3px;
+        box-shadow: 0 4px 14px rgba(56, 189, 248, 0.3);
+    }
+    .btn:hover { filter: brightness(1.1); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+    .btn.ghost {
+        background: transparent; color: var(--accent);
+        border: 1px solid var(--border); box-shadow: none;
+    }
+    .btn.win { background: linear-gradient(135deg, var(--good), #059669); color: #04101f; }
+    .btn.loss { background: linear-gradient(135deg, var(--danger), #be123c); color: white; }
+
+    .stat-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+        margin-bottom: 12px;
+    }
+    .stat {
+        background: var(--panel-2); border-radius: 10px;
+        padding: 10px 8px; text-align: center; border: 1px solid var(--border);
+    }
+    .stat .label { font-size: 10px; color: var(--muted);
+        text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat .val { font-size: 16px; font-weight: 800; margin-top: 3px;
+        font-variant-numeric: tabular-nums; }
+    .stat .val.gold { color: var(--gold); }
+    .stat .val.good { color: var(--good); }
+
+    .combo {
+        background: var(--panel); border-left: 4px solid var(--good);
+        border-radius: 12px; padding: 14px; margin-bottom: 12px;
+        border-top: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .combo:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 18px rgba(52, 211, 153, 0.15);
+    }
+    .combo.featured { border-left-color: var(--gold); background: linear-gradient(135deg, #1f1408 0%, var(--panel) 60%); }
+
+    .combo-head {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 10px; gap: 10px; flex-wrap: wrap;
+    }
+    .combo-title { font-weight: 700; font-size: 14px; }
+    .combo-prob {
+        background: rgba(52, 211, 153, 0.15); color: var(--good);
+        padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+    }
+    .combo-stats {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+        margin: 10px 0; font-variant-numeric: tabular-nums;
+    }
+    .combo-stat {
+        background: var(--bg); border-radius: 8px; padding: 8px 6px;
+        text-align: center;
+    }
+    .combo-stat .lbl { font-size: 9.5px; color: var(--muted);
+        text-transform: uppercase; letter-spacing: 0.4px; }
+    .combo-stat .v { font-size: 15px; font-weight: 800; margin-top: 2px; }
+    .combo-stat .v.gold { color: var(--gold); }
+    .combo-stat .v.good { color: var(--good); }
+
+    .leg {
+        background: var(--bg); border-radius: 8px;
+        padding: 9px 12px; margin: 6px 0; display: flex;
+        justify-content: space-between; align-items: center; gap: 10px;
+    }
+    .leg .l-name { font-weight: 700; font-size: 13px; }
+    .leg .l-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .leg .l-prob { color: var(--gold); font-weight: 700; font-size: 13px;
+        font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+    .actions { display: flex; gap: 8px; margin-top: 12px; }
+    .actions button { flex: 1; padding: 10px; font-size: 13px;
+        border-radius: 10px; border: none; cursor: pointer; font-weight: 700; }
+
+    .empty {
+        text-align: center; color: var(--muted); padding: 30px 12px;
+        background: var(--panel); border-radius: 12px;
+        border: 1px dashed var(--border);
+    }
+    .progress {
+        width: 100%; height: 8px; background: var(--bg);
+        border-radius: 999px; overflow: hidden; margin: 8px 0;
+    }
+    .progress-bar {
+        height: 100%; background: linear-gradient(90deg, var(--good), var(--gold));
+        border-radius: 999px; transition: width 0.4s ease;
+    }
+    .err { color: var(--danger); font-size: 13px; margin-top: 8px; }
+    .history { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .history li { margin: 3px 0; }
+    .reset-link {
+        font-size: 12px; color: var(--muted); text-decoration: underline;
+        cursor: pointer; background: none; border: none; padding: 0;
+    }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="topnav">
+        <a href="/">← Slate</a>
+        <a href="/parlay">🎯 Parlay</a>
+        <a href="/hr-lotto">🎰 HR Lotto</a>
+        <a href="/watchlist">Watchlist</a>
+    </div>
+
+    <div class="hero">
+        <h1>🏆 Bankroll Challenge</h1>
+        <p>Set your stake and target — we build the safest parlay that gets you there.</p>
+    </div>
+
+    <div class="card">
+        <h2>Set your challenge</h2>
+        <div class="form-grid">
+            <div>
+                <label>Starting bankroll ($)</label>
+                <input type="number" id="bankroll" placeholder="100" inputmode="decimal" step="1" min="1">
+            </div>
+            <div>
+                <label>Target profit ($)</label>
+                <input type="number" id="target" placeholder="500" inputmode="decimal" step="1" min="1">
+            </div>
+            <div>
+                <label>Over how many days?</label>
+                <input type="number" id="days" placeholder="1" inputmode="numeric" step="1" min="1" value="1">
+            </div>
+            <div style="display:flex; align-items:flex-end;">
+                <button class="btn ghost" onclick="resetChallenge()" style="padding:12px;">Reset</button>
+            </div>
+            <div class="full">
+                <button class="btn" id="start-btn" onclick="startChallenge()">🚀 Build my parlays</button>
+            </div>
+        </div>
+        <div class="err" id="err"></div>
+    </div>
+
+    <div id="status-panel" style="display:none;"></div>
+
+    <div id="combos"></div>
+
+    <div id="history-card" class="card" style="display:none;">
+        <h2>Wins so far</h2>
+        <ul class="history" id="history-list"></ul>
+        <button class="reset-link" onclick="resetChallenge()">Clear challenge</button>
+    </div>
+</div>
+
+<script>
+const KEY = "mlblab.challenge.v1";
+
+const state = {
+    bankroll: 0,
+    target: 0,
+    days_left: 1,
+    won_so_far: 0,
+    history: [],  // [{stake, profit, legs, ts}]
+};
+
+function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
+function load() {
+    try {
+        const raw = localStorage.getItem(KEY);
+        if (raw) Object.assign(state, JSON.parse(raw));
+    } catch (e) {}
+    if (state.bankroll) document.getElementById("bankroll").value = state.bankroll;
+    if (state.target)   document.getElementById("target").value = state.target;
+    if (state.days_left)document.getElementById("days").value = state.days_left;
+}
+
+const fmtAmer = (n) => n > 0 ? `+${n}` : `${n}`;
+const fmtMoney = (n) => `$${Number(n).toFixed(2)}`;
+const escape = (s) => String(s ?? "").replace(/[<>&"']/g, c => ({
+    "<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;","'":"&#39;"
+}[c]));
+
+function startChallenge() {
+    const b = parseFloat(document.getElementById("bankroll").value);
+    const t = parseFloat(document.getElementById("target").value);
+    const d = parseInt(document.getElementById("days").value || "1", 10);
+    const err = document.getElementById("err");
+    err.textContent = "";
+    if (!b || !t || b <= 0 || t <= 0) {
+        err.textContent = "Bankroll and target must both be greater than 0.";
+        return;
+    }
+    state.bankroll = b;
+    state.target = t;
+    state.days_left = Math.max(1, d);
+    // Don't reset won_so_far — let the user keep stacking on top of prior wins.
+    save();
+    fetchCombos();
+}
+
+async function fetchCombos() {
+    const btn = document.getElementById("start-btn");
+    btn.disabled = true; btn.textContent = "⏳ Building parlays…";
+    try {
+        const res = await fetch("/api/challenge", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                bankroll: state.bankroll,
+                target: state.target,
+                days_left: state.days_left,
+                won_so_far: state.won_so_far,
+            }),
+        });
+        const data = await res.json();
+        renderState(data);
+    } catch (e) {
+        document.getElementById("err").textContent = `Error: ${e}`;
+    } finally {
+        btn.disabled = false; btn.textContent = "🔄 Rebuild parlays";
+    }
+}
+
+function renderState(data) {
+    renderStatus(data);
+    renderCombos(data);
+    renderHistory();
+}
+
+function renderStatus(data) {
+    const panel = document.getElementById("status-panel");
+    if (!data.ok) {
+        panel.innerHTML = `<div class="card"><div class="err">${escape(data.error || "Error")}</div></div>`;
+        panel.style.display = "block"; return;
+    }
+    if (data.goal_met) {
+        panel.innerHTML = `<div class="card" style="border-color:var(--good); background:linear-gradient(135deg,#064e3b22,var(--panel));">
+            <h2 style="color:var(--good);">🎉 ${escape(data.message)}</h2>
+            <div>Reset to start a new challenge.</div>
+        </div>`;
+        panel.style.display = "block"; return;
+    }
+    const ctx = data.context || {};
+    const pct = state.target > 0 ? Math.min(100, (state.won_so_far / state.target) * 100) : 0;
+    panel.innerHTML = `
+        <div class="card">
+            <h2>Challenge status</h2>
+            <div class="stat-grid">
+                <div class="stat"><div class="label">Stake today</div><div class="val">${fmtMoney(ctx.bankroll)}</div></div>
+                <div class="stat"><div class="label">Need today</div><div class="val gold">+${fmtMoney(ctx.needed_today)}</div></div>
+                <div class="stat"><div class="label">Min line</div><div class="val good">${fmtAmer(ctx.required_american)}</div></div>
+            </div>
+            <div class="stat-grid">
+                <div class="stat"><div class="label">Goal</div><div class="val">${fmtMoney(ctx.target)}</div></div>
+                <div class="stat"><div class="label">Banked</div><div class="val good">${fmtMoney(state.won_so_far)}</div></div>
+                <div class="stat"><div class="label">Days left</div><div class="val">${ctx.days_left}</div></div>
+            </div>
+            <div class="progress"><div class="progress-bar" style="width:${pct}%;"></div></div>
+            <div style="font-size:11px; color:var(--muted); text-align:center;">
+                ${pct.toFixed(0)}% of target · pool: ${ctx.pool_size || 0} picks
+                ${data.computing ? " · ⏳ slate still computing" : ""}
+            </div>
+        </div>`;
+    panel.style.display = "block";
+}
+
+function renderCombos(data) {
+    const el = document.getElementById("combos");
+    if (data.goal_met || !data.ok) { el.innerHTML = ""; return; }
+    const combos = data.combos || [];
+    if (!combos.length) {
+        el.innerHTML = `<div class="empty">
+            ${data.computing
+                ? "⏳ Slate is still computing. Try again in about a minute."
+                : "No combos can hit that target with today's picks. Try a lower target or more days."}
+        </div>`;
+        return;
+    }
+    el.innerHTML = combos.map((c, i) => renderCombo(c, i === 0)).join("");
+}
+
+function renderCombo(c, featured) {
+    const legsHtml = c.legs.map(l => `
+        <div class="leg">
+            <div>
+                <div class="l-name">${escape(l.player)}</div>
+                <div class="l-meta">${escape(l.stat)} ${escape(l.pick || "")} ${l.line ?? ""} · ${escape(l.matchup || "")}</div>
+            </div>
+            <div class="l-prob">${(l.probability || 0).toFixed(1)}%<br><span style="font-weight:500; font-size:11px; color:var(--muted);">${fmtAmer(l.fair_american)}</span></div>
+        </div>`).join("");
+    const idAttr = encodeURIComponent(JSON.stringify({
+        stake: c.stake, profit: c.profit, payout: c.payout,
+        legs: c.legs.map(l => `${l.player} ${l.stat}`).join(" + ")
+    }));
+    return `
+        <div class="combo ${featured ? "featured" : ""}">
+            <div class="combo-head">
+                <div class="combo-title">${featured ? "⭐ " : ""}${c.n_legs}-leg parlay</div>
+                <div class="combo-prob">${c.combined_prob.toFixed(1)}% true</div>
+            </div>
+            <div class="combo-stats">
+                <div class="combo-stat"><div class="lbl">Stake</div><div class="v">${fmtMoney(c.stake)}</div></div>
+                <div class="combo-stat"><div class="lbl">Profit</div><div class="v gold">${fmtMoney(c.profit)}</div></div>
+                <div class="combo-stat"><div class="lbl">Odds</div><div class="v good">${fmtAmer(c.combined_american)}</div></div>
+            </div>
+            ${legsHtml}
+            <div class="actions">
+                <button class="btn win" onclick='markWin(${idAttr ? `"${idAttr}"` : ""})'>✓ Won — next parlay</button>
+                <button class="btn loss" onclick="markLoss()">✗ Lost</button>
+            </div>
+        </div>`;
+}
+
+function markWin(idAttr) {
+    try {
+        const c = JSON.parse(decodeURIComponent(idAttr));
+        state.won_so_far += c.profit;
+        state.history.push({
+            ts: Date.now(),
+            stake: c.stake,
+            profit: c.profit,
+            payout: c.payout,
+            legs: c.legs,
+            result: "WIN",
+        });
+        save();
+        // "Bank stake, parlay only profit": next stake = profit just won.
+        state.bankroll = c.profit;
+        document.getElementById("bankroll").value = state.bankroll.toFixed(2);
+        save();
+        fetchCombos();
+    } catch (e) {
+        document.getElementById("err").textContent = `Error: ${e}`;
+    }
+}
+
+function markLoss() {
+    state.history.push({ts: Date.now(), result: "LOSS"});
+    // After a loss, drop a day off the timeline (if any) so the model
+    // doesn't keep trying to win the full target in the time we had left.
+    if (state.days_left > 1) state.days_left -= 1;
+    document.getElementById("days").value = state.days_left;
+    save();
+    fetchCombos();
+}
+
+function renderHistory() {
+    const card = document.getElementById("history-card");
+    const list = document.getElementById("history-list");
+    if (!state.history.length) { card.style.display = "none"; return; }
+    card.style.display = "block";
+    list.innerHTML = state.history.slice(-10).reverse().map(h => {
+        if (h.result === "LOSS") return `<li>✗ Loss</li>`;
+        return `<li>✓ ${fmtMoney(h.profit)} profit on ${escape(h.legs || "")}</li>`;
+    }).join("");
+}
+
+function resetChallenge() {
+    if (state.history.length && !confirm("Clear this challenge and history?")) return;
+    Object.assign(state, {bankroll: 0, target: 0, days_left: 1, won_so_far: 0, history: []});
+    localStorage.removeItem(KEY);
+    ["bankroll","target"].forEach(id => document.getElementById(id).value = "");
+    document.getElementById("days").value = 1;
+    document.getElementById("status-panel").style.display = "none";
+    document.getElementById("combos").innerHTML = "";
+    document.getElementById("history-card").style.display = "none";
+    document.getElementById("err").textContent = "";
+}
+
+load();
+if (state.bankroll > 0 && state.target > 0) fetchCombos();
+</script>
+</body>
+</html>

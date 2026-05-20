@@ -1373,6 +1373,227 @@ def hr_lotto_page():
     return render_template("hr_lotto.html")
 
 
+# ── Challenges: bankroll-to-target parlay solver ────────────────────────────
+def _gather_pool() -> list[dict]:
+    """Unified pick pool from all caches with the fields the solver needs."""
+    pool = []
+    with _PLAYS_LOCK:
+        for p in PLAYS_CACHE["data"]:
+            if p.get("pick") == "PASS":
+                continue
+            prob = p.get("probability")
+            if not prob or prob <= 0:
+                continue
+            pool.append({
+                "player": p.get("headline") or p.get("player"),
+                "stat": p.get("stat_label") or "prop",
+                "pick": p.get("pick", "OVER"),
+                "line": p.get("line"),
+                "probability": float(prob),
+                "matchup": p.get("matchup"),
+                "game_pk": p.get("game_pk"),
+                "source": "play",
+            })
+        for h in HR_THREATS_CACHE["data"]:
+            prob = h.get("probability")
+            if not prob or prob <= 0:
+                continue
+            pool.append({
+                "player": h.get("player"),
+                "stat": "Home Run",
+                "pick": "OVER",
+                "line": 0.5,
+                "probability": float(prob),
+                "matchup": h.get("matchup"),
+                "game_pk": h.get("game_pk"),
+                "source": "hr",
+            })
+        for c in HRR_COMBO_CACHE["data"]:
+            prob = c.get("probability")
+            if not prob or prob <= 0:
+                continue
+            pool.append({
+                "player": c.get("player"),
+                "stat": "1+ H/R/RBI",
+                "pick": "OVER",
+                "line": 0.5,
+                "probability": float(prob),
+                "matchup": c.get("matchup"),
+                "game_pk": c.get("game_pk"),
+                "source": "hrr",
+            })
+    # De-dupe: same player + same game (HR + HRR for the same hitter) — keep
+    # highest probability variant per (player, game) so we don't stack
+    # correlated legs on the same hitter.
+    best_by_key: dict = {}
+    for pk in pool:
+        key = (pk.get("player"), pk.get("game_pk"))
+        cur = best_by_key.get(key)
+        if cur is None or pk["probability"] > cur["probability"]:
+            best_by_key[key] = pk
+    return list(best_by_key.values())
+
+
+def _solve_challenge(pool: list[dict], stake: float, target_today: float,
+                     max_legs: int = 8, max_combos: int = 5) -> list[dict]:
+    """Find Safe-style parlays that get from `stake` to `stake + target_today`.
+
+    Strategy:
+    - required_decimal = (stake + target_today) / stake
+    - Search combos of size 2..max_legs from the top 20 highest-probability
+      picks (Safe risk style favors prob over payout)
+    - One leg per game (no correlated within-game stacking)
+    - Keep combos where combined_decimal >= required_decimal
+    - Sort by combined model probability descending (safest first)
+    - Prefer the smallest number of legs that satisfies the target — fewer
+      legs = lower variance and a higher real hit rate vs the model number
+    """
+    from itertools import combinations
+    from math import prod
+
+    if stake <= 0 or target_today <= 0:
+        return []
+    required_decimal = (stake + target_today) / stake
+
+    # Pool size shrinks as leg count grows so we never evaluate millions of
+    # combos. Safe risk style: we want HIGH-prob legs first, so the deeper
+    # pool only matters for 2-3 leggers where we can afford the search.
+    # C(30,3)=4060, C(20,5)=15504, C(15,7)=6435, C(12,8)=495 — all tractable.
+    pool_for_n = {2: 30, 3: 30, 4: 22, 5: 20, 6: 16, 7: 14, 8: 12}
+
+    out = []
+    seen_signatures: set = set()
+    # Iterate smallest leg counts first; stop early once we have enough at
+    # the smallest viable n (Safe style prefers fewer legs).
+    for n in range(2, max_legs + 1):
+        size = pool_for_n.get(n, 12)
+        top = sorted(pool, key=lambda x: x["probability"], reverse=True)[:size]
+        if len(top) < n:
+            continue
+        n_added = 0
+        for combo in combinations(top, n):
+            gpks = [c.get("game_pk") for c in combo]
+            valid = [g for g in gpks if g is not None]
+            if len(valid) != len(set(valid)):
+                continue  # two legs in same game
+            dec = prod(100.0 / c["probability"] for c in combo)
+            if dec < required_decimal:
+                continue
+            prob = prod(c["probability"] / 100.0 for c in combo)
+            sig = tuple(sorted((c.get("player"), c.get("stat")) for c in combo))
+            if sig in seen_signatures:
+                continue
+            seen_signatures.add(sig)
+            payout = stake * dec
+            out.append({
+                "n_legs": n,
+                "legs": [{
+                    "player": c.get("player"),
+                    "stat": c.get("stat"),
+                    "pick": c.get("pick"),
+                    "line": c.get("line"),
+                    "probability": round(c["probability"], 1),
+                    "fair_american": _decimal_to_american(100.0 / c["probability"]),
+                    "matchup": c.get("matchup"),
+                } for c in combo],
+                "combined_prob": round(prob * 100, 2),
+                "combined_decimal": round(dec, 2),
+                "combined_american": _decimal_to_american(dec),
+                "stake": round(stake, 2),
+                "payout": round(payout, 2),
+                "profit": round(payout - stake, 2),
+            })
+            n_added += 1
+        # Early exit: once we have enough combos from smaller leg counts, stop
+        # searching deeper. Safe style prefers fewer legs anyway.
+        if len(out) >= max_combos * 3:
+            break
+
+    # Safe: highest combined probability wins; tie-break by fewer legs.
+    out.sort(key=lambda x: (-x["combined_prob"], x["n_legs"]))
+    return out[:max_combos]
+
+
+@app.route("/challenges", methods=["GET"])
+@login_required
+def challenges_page():
+    return render_template("challenges.html")
+
+
+@app.route("/api/challenge", methods=["POST"])
+@login_required
+def api_challenge():
+    """Generate Safe-style parlays from current stake → target.
+
+    Body: {bankroll: float, target: float, days_left: int, won_so_far: float}
+      - bankroll: current available money to stake on the next parlay
+      - target: total profit goal for the whole challenge
+      - days_left: number of days remaining (1 = all today)
+      - won_so_far: profit already banked from previous challenge wins
+
+    Returns Safe-ranked parlay combos that hit today's required payout, plus
+    a one-line "context" the UI can show (stake, today's target, days split).
+    """
+    body = request.get_json(silent=True) or {}
+    try:
+        bankroll = float(body.get("bankroll", 0))
+        target = float(body.get("target", 0))
+        days_left = max(1, int(body.get("days_left", 1)))
+        won_so_far = float(body.get("won_so_far", 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bankroll/target/days_left must be numbers"}), 400
+
+    if bankroll <= 0 or target <= 0:
+        return jsonify({"ok": False, "error": "Enter bankroll and target > 0"}), 400
+
+    remaining = max(0.0, target - won_so_far)
+    if remaining <= 0:
+        return jsonify({
+            "ok": True,
+            "goal_met": True,
+            "message": f"Goal reached! ${won_so_far:.2f} of ${target:.2f} target won.",
+            "combos": [],
+        })
+
+    # Even split across remaining days (user is "Bank stake, parlay profit",
+    # so today's stake is the configured bankroll on every day's first bet).
+    needed_today = remaining / days_left
+
+    _ensure_plays_refresh()
+    pool = _gather_pool()
+    if not pool:
+        return jsonify({
+            "ok": True,
+            "computing": PLAYS_CACHE["computing"],
+            "message": "Slate still computing — try again in ~1 minute.",
+            "combos": [],
+            "context": {
+                "bankroll": bankroll, "target": target, "remaining": remaining,
+                "days_left": days_left, "needed_today": round(needed_today, 2),
+                "won_so_far": won_so_far, "pool_size": 0,
+            },
+        })
+
+    combos = _solve_challenge(pool, bankroll, needed_today)
+    return jsonify({
+        "ok": True,
+        "computing": PLAYS_CACHE["computing"],
+        "context": {
+            "bankroll": bankroll,
+            "target": target,
+            "remaining": round(remaining, 2),
+            "days_left": days_left,
+            "needed_today": round(needed_today, 2),
+            "won_so_far": won_so_far,
+            "pool_size": len(pool),
+            "required_american": _decimal_to_american(
+                (bankroll + needed_today) / bankroll
+            ),
+        },
+        "combos": combos,
+    })
+
+
 @app.route("/api/hr-lotto", methods=["GET"])
 @login_required
 def api_hr_lotto():
