@@ -1400,7 +1400,7 @@ def _load_today_schedule_status() -> dict:
         return {}
 
 
-def _is_game_bettable(game_info: dict, lead_min: int = 5) -> bool:
+def _is_game_bettable(game_info: dict, lead_min: int = 0) -> bool:
     """A game is bettable if it hasn't started (with a small lead time) AND
     its status isn't a terminal/post-start state. If status/time missing,
     default to True (don't hide picks for missing data)."""
@@ -1418,8 +1418,11 @@ def _is_game_bettable(game_info: dict, lead_min: int = 5) -> bool:
         # game_time is ISO with trailing Z (UTC).
         when = _dt.datetime.fromisoformat(gt.replace("Z", "+00:00"))
         now = _dt.datetime.now(_dt.timezone.utc)
-        # Bettable if game starts at least `lead_min` minutes in the future
-        return when > now + _dt.timedelta(minutes=lead_min)
+        # Bettable until first pitch. Books usually take bets through warmup
+        # right up to game time; status flips to "In Progress" at first
+        # pitch which is caught above. lead_min defaults to 0 — only positive
+        # values restrict further.
+        return when >= now + _dt.timedelta(minutes=lead_min)
     except Exception:
         return True
 
