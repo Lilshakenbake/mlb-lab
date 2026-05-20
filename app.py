@@ -1523,41 +1523,33 @@ def challenges_page():
 @app.route("/api/challenge", methods=["POST"])
 @login_required
 def api_challenge():
-    """Generate Safe-style parlays from current stake → target.
+    """Generate Safe-style parlays for the current rung of a ladder challenge.
 
-    Body: {bankroll: float, target: float, days_left: int, won_so_far: float}
-      - bankroll: current available money to stake on the next parlay
-      - target: total profit goal for the whole challenge
-      - days_left: number of days remaining (1 = all today)
-      - won_so_far: profit already banked from previous challenge wins
+    Body: {bankroll: float, target: float, days_left: int}
+      - bankroll: stake for THIS parlay (the current rung's starting cash)
+      - target: dollar TOTAL the user wants AFTER this rung wins
+        (e.g. bankroll=20, target=50 → solver needs +$30 profit)
+      - days_left: days the user wants to spread THIS rung across (1 = today).
+        Multi-day mode splits the required profit evenly across the days.
 
-    Returns Safe-ranked parlay combos that hit today's required payout, plus
-    a one-line "context" the UI can show (stake, today's target, days split).
+    Returns Safe-ranked parlays that take `bankroll` → `target` in one parlay
+    (or in `days_left` even steps when > 1).
     """
     body = request.get_json(silent=True) or {}
     try:
         bankroll = float(body.get("bankroll", 0))
         target = float(body.get("target", 0))
         days_left = max(1, int(body.get("days_left", 1)))
-        won_so_far = float(body.get("won_so_far", 0))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bankroll/target/days_left must be numbers"}), 400
 
     if bankroll <= 0 or target <= 0:
         return jsonify({"ok": False, "error": "Enter bankroll and target > 0"}), 400
+    if target <= bankroll:
+        return jsonify({"ok": False, "error": "Target must be larger than bankroll"}), 400
 
-    remaining = max(0.0, target - won_so_far)
-    if remaining <= 0:
-        return jsonify({
-            "ok": True,
-            "goal_met": True,
-            "message": f"Goal reached! ${won_so_far:.2f} of ${target:.2f} target won.",
-            "combos": [],
-        })
-
-    # Even split across remaining days (user is "Bank stake, parlay profit",
-    # so today's stake is the configured bankroll on every day's first bet).
-    needed_today = remaining / days_left
+    profit_needed = target - bankroll
+    needed_today = profit_needed / days_left
 
     _ensure_plays_refresh()
     pool = _gather_pool()
@@ -1568,9 +1560,10 @@ def api_challenge():
             "message": "Slate still computing — try again in ~1 minute.",
             "combos": [],
             "context": {
-                "bankroll": bankroll, "target": target, "remaining": remaining,
+                "bankroll": bankroll, "target": target,
+                "profit_needed": round(profit_needed, 2),
                 "days_left": days_left, "needed_today": round(needed_today, 2),
-                "won_so_far": won_so_far, "pool_size": 0,
+                "pool_size": 0,
             },
         })
 
@@ -1581,10 +1574,9 @@ def api_challenge():
         "context": {
             "bankroll": bankroll,
             "target": target,
-            "remaining": round(remaining, 2),
+            "profit_needed": round(profit_needed, 2),
             "days_left": days_left,
             "needed_today": round(needed_today, 2),
-            "won_so_far": won_so_far,
             "pool_size": len(pool),
             "required_american": _decimal_to_american(
                 (bankroll + needed_today) / bankroll
