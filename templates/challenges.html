@@ -45,6 +45,32 @@
     .hero h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.5px; }
     .hero p { margin: 0; font-size: 13px; opacity: 0.85; }
 
+    /* Mode tabs */
+    .mode-tabs {
+        display: flex; gap: 6px; background: var(--panel-2);
+        padding: 4px; border-radius: 12px; margin-bottom: 14px;
+        border: 1px solid var(--border);
+    }
+    .mode-tab {
+        flex: 1; padding: 10px; text-align: center; cursor: pointer;
+        font-weight: 700; font-size: 13px; border-radius: 9px;
+        color: var(--muted); transition: all 0.15s ease;
+        background: transparent; border: none;
+    }
+    .mode-tab.active {
+        background: linear-gradient(135deg, var(--accent), #0ea5e9);
+        color: #04101f;
+        box-shadow: 0 2px 8px rgba(56, 189, 248, 0.3);
+    }
+    .difficulty {
+        display: inline-block; padding: 3px 9px; border-radius: 999px;
+        font-size: 11px; font-weight: 700; margin-left: 6px;
+    }
+    .diff-easy { background: rgba(52, 211, 153, 0.18); color: var(--good); border: 1px solid var(--good); }
+    .diff-med  { background: rgba(251, 191, 36, 0.18); color: var(--gold); border: 1px solid var(--gold); }
+    .diff-hard { background: rgba(251, 113, 133, 0.18); color: var(--danger); border: 1px solid var(--danger); }
+    .diff-moon { background: rgba(167, 139, 250, 0.18); color: var(--purple); border: 1px solid var(--purple); }
+
     .card {
         background: var(--panel); border: 1px solid var(--border);
         border-radius: 14px; padding: 16px; margin-bottom: 14px;
@@ -211,11 +237,48 @@
     </div>
 
     <div class="hero">
-        <h1>🪜 Ladder Challenge</h1>
-        <p>Climb your bankroll: $1 → $20 → $50 → $100. Each win becomes the next stake.</p>
+        <h1>🎯 Smart Picks</h1>
+        <p>Bet now for what's live, or climb a bankroll ladder. Always the best parlays for your roll.</p>
     </div>
 
-    <div class="card">
+    <div class="mode-tabs">
+        <button class="mode-tab active" id="tab-now"    onclick="switchMode('now')">⚡ Bet Now</button>
+        <button class="mode-tab"        id="tab-ladder" onclick="switchMode('ladder')">🪜 Ladder Climb</button>
+    </div>
+
+    <!-- BET NOW MODE -->
+    <div class="card" id="mode-now-card">
+        <h2>What do you want to win right now?</h2>
+        <div class="preset-row">
+            <button class="preset" onclick="quickPreset(5,15)">$5 → $15</button>
+            <button class="preset" onclick="quickPreset(10,50)">$10 → $50</button>
+            <button class="preset" onclick="quickPreset(20,100)">$20 → $100</button>
+            <button class="preset" onclick="quickPreset(50,200)">$50 → $200</button>
+        </div>
+        <div class="form-grid">
+            <div>
+                <label>Your bankroll</label>
+                <input type="number" id="now-stake" placeholder="20" inputmode="decimal" step="0.01" min="0.01">
+            </div>
+            <div>
+                <label>Want to win (total)</label>
+                <input type="number" id="now-target" placeholder="100" inputmode="decimal" step="0.01" min="0.01">
+            </div>
+            <div class="full" style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted);">
+                <input type="checkbox" id="now-live" checked style="width:auto;">
+                <label for="now-live" style="margin:0; text-transform:none; letter-spacing:0; font-size:13px;">
+                    Live games only (skip games that already started)
+                </label>
+            </div>
+            <div class="full">
+                <button class="btn" id="now-btn" onclick="betNow()">⚡ Show me the best parlays</button>
+            </div>
+        </div>
+        <div class="err" id="now-err"></div>
+    </div>
+
+    <!-- LADDER MODE -->
+    <div class="card" id="mode-ladder-card" style="display:none;">
         <h2>Build your ladder</h2>
         <div class="preset-row">
             <button class="preset" onclick="usePreset('1,20,50,100')">$1 → $20 → $50 → $100</button>
@@ -263,7 +326,95 @@
 
 <script>
 const KEY = "mlblab.ladder.v1";
+const MODE_KEY = "mlblab.mode.v1";
 
+function switchMode(m) {
+    document.getElementById("tab-now").classList.toggle("active", m === "now");
+    document.getElementById("tab-ladder").classList.toggle("active", m === "ladder");
+    document.getElementById("mode-now-card").style.display = m === "now" ? "" : "none";
+    document.getElementById("mode-ladder-card").style.display = m === "ladder" ? "" : "none";
+    // Hide ladder-specific panels in Bet Now mode
+    if (m === "now") {
+        document.getElementById("ladder-viz").style.display = "none";
+        document.getElementById("status-panel").style.display = "none";
+        document.getElementById("history-card").style.display = "none";
+        document.getElementById("combos").innerHTML = "";
+    }
+    localStorage.setItem(MODE_KEY, m);
+}
+
+function quickPreset(stake, target) {
+    document.getElementById("now-stake").value = stake;
+    document.getElementById("now-target").value = target;
+}
+
+function difficultyBadge(americanLine) {
+    // Required American line → difficulty bucket.
+    if (americanLine <= 150)  return '<span class="difficulty diff-easy">Easy</span>';
+    if (americanLine <= 400)  return '<span class="difficulty diff-med">Medium</span>';
+    if (americanLine <= 1000) return '<span class="difficulty diff-hard">Hard</span>';
+    return '<span class="difficulty diff-moon">🌙 Longshot</span>';
+}
+
+async function betNow() {
+    const stake = parseFloat(document.getElementById("now-stake").value || "0");
+    const target = parseFloat(document.getElementById("now-target").value || "0");
+    const liveOnly = document.getElementById("now-live").checked;
+    const err = document.getElementById("now-err");
+    err.textContent = "";
+    if (stake <= 0 || target <= 0) {
+        err.textContent = "Enter both bankroll and target above 0.";
+        return;
+    }
+    if (target <= stake) {
+        err.textContent = "Target must be larger than bankroll.";
+        return;
+    }
+    const btn = document.getElementById("now-btn");
+    btn.disabled = true; btn.textContent = "⏳ Scanning the slate…";
+    try {
+        const res = await fetch("/api/challenge", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                bankroll: stake, target: target,
+                days_left: 1, live_only: liveOnly,
+            }),
+        });
+        const data = await res.json();
+        renderNowStatus(data, stake, target, liveOnly);
+        renderCombos(data);
+    } catch (e) {
+        err.textContent = `Error: ${e}`;
+    } finally {
+        btn.disabled = false; btn.textContent = "⚡ Show me the best parlays";
+    }
+}
+
+function renderNowStatus(data, stake, target, liveOnly) {
+    const panel = document.getElementById("status-panel");
+    if (!data.ok) {
+        panel.innerHTML = `<div class="card"><div class="err">${escape(data.error || "Error")}</div></div>`;
+        panel.style.display = "block"; return;
+    }
+    const ctx = data.context || {};
+    const ra = ctx.required_american || 0;
+    panel.innerHTML = `
+        <div class="card">
+            <h2>${fmtMoney(stake)} → ${fmtMoney(target)} ${difficultyBadge(ra)}</h2>
+            <div class="stat-grid">
+                <div class="stat"><div class="label">Stake</div><div class="val">${fmtMoney(stake)}</div></div>
+                <div class="stat"><div class="label">Need profit</div><div class="val gold">+${fmtMoney(ctx.needed_today)}</div></div>
+                <div class="stat"><div class="label">Min line</div><div class="val good">${fmtAmer(ra)}</div></div>
+            </div>
+            <div style="font-size:11px; color:var(--muted); text-align:center;">
+                pool: ${ctx.pool_size || 0} picks
+                ${liveOnly ? " · 🔴 live games only" : " · including all of today's slate"}
+                ${data.computing ? " · ⏳ slate still computing" : ""}
+            </div>
+        </div>`;
+    panel.style.display = "block";
+}
 const state = {
     ladder: [],       // [1, 20, 50, 100] — first is starting bankroll
     stage: 0,         // index of current target (1 = first target = ladder[1])
@@ -536,7 +687,9 @@ function resetChallenge() {
 }
 
 load();
-if (state.ladder.length >= 2 && state.stage >= 1) fetchCombos();
+const savedMode = localStorage.getItem(MODE_KEY) || "now";
+switchMode(savedMode);
+if (savedMode === "ladder" && state.ladder.length >= 2 && state.stage >= 1) fetchCombos();
 </script>
 </body>
 </html>

@@ -1374,9 +1374,69 @@ def hr_lotto_page():
 
 
 # ── Challenges: bankroll-to-target parlay solver ────────────────────────────
-def _gather_pool() -> list[dict]:
-    """Unified pick pool from all caches with the fields the solver needs."""
+def _load_today_schedule_status() -> dict:
+    """Return {game_pk: {"game_time": iso, "status": str}} for today's slate.
+
+    Reads the cached schedule JSON for today's local date. Returns {} if the
+    file is missing — callers should treat that as "no filter info available".
+    """
+    import datetime as _dt
+    import json as _json
+    from pathlib import Path as _Path
+    cache_dir = os.getenv("MLB_CACHE_DIR", "data_cache")
+    today = _dt.datetime.now().strftime("%Y-%m-%d")
+    path = _Path(cache_dir) / "schedule" / f"{today}.json"
+    if not path.exists():
+        return {}
+    try:
+        raw = _json.loads(path.read_text())
+        out = {}
+        for g in raw.get("data", []):
+            gpk = g.get("gamePk") or g.get("game_pk")
+            if gpk is None:
+                continue
+            out[gpk] = {
+                "game_time": g.get("game_time"),
+                "status": g.get("status", ""),
+            }
+        return out
+    except Exception:
+        return {}
+
+
+def _is_game_bettable(game_info: dict, lead_min: int = 5) -> bool:
+    """A game is bettable if it hasn't started (with a small lead time) AND
+    its status isn't a terminal/post-start state. If status/time missing,
+    default to True (don't hide picks for missing data)."""
+    import datetime as _dt
+    status = (game_info.get("status") or "").lower()
+    # Status strings from MLB stats API that mean "no longer bettable":
+    bad = ("final", "game over", "in progress", "live", "completed early",
+           "delayed", "postponed", "suspended")
+    if any(b in status for b in bad):
+        return False
+    gt = game_info.get("game_time")
+    if not gt:
+        return True  # unknown start — let it through
+    try:
+        # game_time is ISO with trailing Z (UTC).
+        when = _dt.datetime.fromisoformat(gt.replace("Z", "+00:00"))
+        now = _dt.datetime.now(_dt.timezone.utc)
+        # Bettable if game starts at least `lead_min` minutes in the future
+        return when > now + _dt.timedelta(minutes=lead_min)
+    except Exception:
+        return True
+
+
+def _gather_pool(live_only: bool = False) -> list[dict]:
+    """Unified pick pool from all caches with the fields the solver needs.
+
+    When `live_only=True`, filters out picks for games that have already
+    started or finished — so a "Bet Now" mid-day request only shows picks
+    on games the user can actually still place a wager on.
+    """
     pool = []
+    sched = _load_today_schedule_status() if live_only else {}
     with _PLAYS_LOCK:
         for p in PLAYS_CACHE["data"]:
             if p.get("pick") == "PASS":
@@ -1422,6 +1482,10 @@ def _gather_pool() -> list[dict]:
                 "game_pk": c.get("game_pk"),
                 "source": "hrr",
             })
+    # Live-only filter: drop picks whose game has started or completed.
+    if live_only and sched:
+        pool = [p for p in pool
+                if _is_game_bettable(sched.get(p.get("game_pk"), {}))]
     # De-dupe: same player + same game (HR + HRR for the same hitter) — keep
     # highest probability variant per (player, game) so we don't stack
     # correlated legs on the same hitter.
@@ -1558,7 +1622,8 @@ def api_challenge():
     needed_today = profit_needed / days_left
 
     _ensure_plays_refresh()
-    pool = _gather_pool()
+    live_only = bool(body.get("live_only", False))
+    pool = _gather_pool(live_only=live_only)
     if not pool:
         return jsonify({
             "ok": True,
