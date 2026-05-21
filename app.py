@@ -1667,26 +1667,12 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
         return []
     required_decimal = (stake + target_today) / stake
 
-    # Source diversification caps to prevent correlated parlay legs
-    # (e.g. 4 HR threats from the same hitter-friendly weather/park
-    # conditions, or 3 K props that all blow up if one ace exits early).
-    HR_CAP = 2       # at most 2 home-run-type legs per combo
-    K_CAP = 2        # at most 2 pitcher-K legs per combo
-
-    def _bucket(pick):
-        stat = pick.get("stat") or ""
-        if stat in {"Home Run", "Home Runs"} or pick.get("source") == "hr":
-            return "hr"
-        if stat == "Strikeouts":
-            return "k"
-        return "other"
-
+    # Diversification caps removed per user request: forcing HR/K limits
+    # was making the solver stack high-variance HR legs when a safer all-RBI
+    # or all-hits parlay with more legs would actually clear the target at
+    # higher combined probability. The solver already sorts by composite
+    # score and picks the safest combo, so let it pick freely.
     def _passes_diversification(combo):
-        buckets = [_bucket(c) for c in combo]
-        if buckets.count("hr") > HR_CAP:
-            return False
-        if buckets.count("k") > K_CAP:
-            return False
         return True
 
     # Pool size shrinks as leg count grows so we never evaluate millions of
