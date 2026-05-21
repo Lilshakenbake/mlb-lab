@@ -1579,6 +1579,30 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
     return list(best_by_key.values())
 
 
+def _calibrated_probability(pick: dict) -> float:
+    """Shrink overconfident model probabilities toward reality.
+
+    Tracker data shows the model is overconfident by ~7pp in the 65-74%
+    range on hitter props (says 74%, actually hits 67%). Multiplying by
+    a small factor before parlay math makes ladder odds honest instead
+    of over-promising.
+
+    Conservative per-source factors (tweak as more graded data accrues):
+      - hitter props in 65-80% band: × 0.92  (the overconfident zone)
+      - hitter props outside band: unchanged (calibration was fine)
+      - HRR / HR threats: × 0.95 (small sample, lean a bit conservative)
+      - pitcher Ks / ML / RL: unchanged for now
+    """
+    raw = float(pick.get("probability") or 0)
+    stat = pick.get("stat") or ""
+    src = pick.get("source") or ""
+    if stat in {"Hits", "Total Bases", "Home Runs", "RBIs"} and 65 <= raw <= 80:
+        return raw * 0.92
+    if src in {"hr", "hrr"} or stat in {"Home Run", "1+ H/R/RBI"}:
+        return raw * 0.95
+    return raw
+
+
 def _composite_score(pick: dict) -> float:
     """Ranking score that boosts picks where the market disagrees with us.
 
@@ -1589,7 +1613,7 @@ def _composite_score(pick: dict) -> float:
     (implied 71%, ~0 edge). Picks without market edge data fall through
     at raw probability (neutral).
     """
-    prob = pick.get("probability") or 0.0
+    prob = _calibrated_probability(pick)
     edge = pick.get("market_edge_pct")
     if edge is None or edge <= 0:
         return float(prob)
@@ -1617,6 +1641,28 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
         return []
     required_decimal = (stake + target_today) / stake
 
+    # Source diversification caps to prevent correlated parlay legs
+    # (e.g. 4 HR threats from the same hitter-friendly weather/park
+    # conditions, or 3 K props that all blow up if one ace exits early).
+    HR_CAP = 2       # at most 2 home-run-type legs per combo
+    K_CAP = 2        # at most 2 pitcher-K legs per combo
+
+    def _bucket(pick):
+        stat = pick.get("stat") or ""
+        if stat in {"Home Run", "Home Runs"} or pick.get("source") == "hr":
+            return "hr"
+        if stat == "Strikeouts":
+            return "k"
+        return "other"
+
+    def _passes_diversification(combo):
+        buckets = [_bucket(c) for c in combo]
+        if buckets.count("hr") > HR_CAP:
+            return False
+        if buckets.count("k") > K_CAP:
+            return False
+        return True
+
     # Pool size shrinks as leg count grows so we never evaluate millions of
     # combos. Safe risk style: we want HIGH-prob legs first, so the deeper
     # pool only matters for 2-3 leggers where we can afford the search.
@@ -1641,10 +1687,19 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
             valid = [g for g in gpks if g is not None]
             if len(valid) != len(set(valid)):
                 continue  # two legs in same game
-            dec = prod(100.0 / c["probability"] for c in combo)
+            if not _passes_diversification(combo):
+                continue  # too many HRs or Ks in one parlay (correlated)
+            # Use CALIBRATED probabilities for parlay math so the odds and
+            # hit-rate shown to the user are honest, not the inflated raw
+            # model number. Tracker shows raw is ~7pp overconfident in the
+            # 65-74% band.
+            cal_probs = [_calibrated_probability(c) for c in combo]
+            if any(p <= 0 for p in cal_probs):
+                continue
+            dec = prod(100.0 / p for p in cal_probs)
             if dec < required_decimal:
                 continue
-            prob = prod(c["probability"] / 100.0 for c in combo)
+            prob = prod(p / 100.0 for p in cal_probs)
             sig = tuple(sorted((c.get("player"), c.get("stat")) for c in combo))
             if sig in seen_signatures:
                 continue
@@ -1661,10 +1716,11 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
                     "stat": c.get("stat"),
                     "pick": c.get("pick"),
                     "line": c.get("line"),
-                    "probability": round(c["probability"], 1),
-                    "fair_american": _decimal_to_american(100.0 / c["probability"]),
+                    # Show calibrated probability so per-leg numbers
+                    "probability": round(cp, 1),
+                    "fair_american": _decimal_to_american(100.0 / cp),
                     "matchup": c.get("matchup"),
-                } for c in combo],
+                } for c, cp in zip(combo, cal_probs)],
                 "combined_prob": round(prob * 100, 2),
                 "combined_decimal": round(dec, 2),
                 "combined_american": _decimal_to_american(dec),
