@@ -30,7 +30,7 @@ from src import ai_review
 
 PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "16"))
 PROFILE_FETCH_WORKERS = int(os.getenv("PROFILE_FETCH_WORKERS", "2"))
-HITTERS_PER_TEAM = int(os.getenv("HITTERS_PER_TEAM", "5"))
+HITTERS_PER_TEAM = int(os.getenv("HITTERS_PER_TEAM", "9"))
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
@@ -40,6 +40,10 @@ BOARD_CACHE = {}
 BOARD_CACHE_TTL_SECONDS = int(os.getenv("BOARD_CACHE_TTL", "1800"))  # 30 min default
 
 PLAYS_CACHE = {"ts": 0, "data": [], "computing": False}
+# Raw, undiversified play pool — every hitter × every stat type that wasn't
+# PASS. Drives the challenge solver so the parlay search can consider the
+# FULL catalog, not just the ~20 plays the dashboard displays.
+RAW_PLAYS_CACHE = {"ts": 0, "data": []}
 PLAYS_CACHE_TTL_SECONDS = int(os.getenv("PLAYS_CACHE_TTL", "600"))  # 10 min default
 PLAYS_GAME_CONCURRENCY = int(os.getenv("PLAYS_GAME_CONCURRENCY", "2"))
 PLAYS_LIMIT = int(os.getenv("PLAYS_LIMIT", "20"))
@@ -499,8 +503,13 @@ def _build_plays_for_game(game):
                 "game_pk": game.get("gamePk"),
             })
 
-    # 1+ H/R/RBI prop — flows through the same play pipeline as other hitter plays.
-    for prop in boards.get("hrr_combo", []):
+    # 1+ H/R/RBI prop — kept OUT of this pipeline because hrr_combo plays
+    # also land in HRR_COMBO_CACHE via a separate path, and their inflated
+    # ~80% probability was hijacking every per-game slot in the diversified
+    # plays display (squeezing out hits/TB/HR/RBI/steals entirely).
+    # _gather_pool pulls HRR_COMBO_CACHE independently, so the solver still
+    # sees them. Setting the loop variable to [] keeps the code structure.
+    for prop in []:
         if prop.get("pick") == "PASS":
             continue
         out.append({
@@ -925,6 +934,11 @@ def _refresh_plays_blocking():
             with _PLAYS_LOCK:
                 PLAYS_CACHE["ts"] = time.time()
                 PLAYS_CACHE["data"] = diversified
+                # Raw pool for the solver: every non-PASS pick, no per-game
+                # cap, no display limit. Sorted by probability so the
+                # solver's pool_for_n trim still grabs the best candidates.
+                RAW_PLAYS_CACHE["ts"] = time.time()
+                RAW_PLAYS_CACHE["data"] = list(sorted_plays)
                 HR_THREATS_CACHE["ts"] = time.time()
                 # Diversify HR threats so one slugger-heavy matchup doesn't
                 # eat half the board. Two-pass: top-of-game first, then fill
@@ -1512,7 +1526,11 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
     pool = []
     sched = _load_today_schedule_status() if live_only else {}
     with _PLAYS_LOCK:
-        for p in PLAYS_CACHE["data"]:
+        # Solver pool reads from the RAW cache (full catalog, no display
+        # diversification cap). Falls back to PLAYS_CACHE if raw hasn't
+        # been populated yet.
+        play_source = RAW_PLAYS_CACHE["data"] or PLAYS_CACHE["data"]
+        for p in play_source:
             if p.get("pick") == "PASS":
                 continue
             prob = p.get("probability")
@@ -1679,7 +1697,10 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
     # combos. Safe risk style: we want HIGH-prob legs first, so the deeper
     # pool only matters for 2-3 leggers where we can afford the search.
     # C(30,3)=4060, C(20,5)=15504, C(15,7)=6435, C(12,8)=495 — all tractable.
-    pool_for_n = {2: 30, 3: 30, 4: 22, 5: 20, 6: 16, 7: 14, 8: 12}
+    # Larger candidate pools now that RAW_PLAYS_CACHE feeds the full catalog
+    # (was ~20 plays max from the diversified display list, now hundreds).
+    # C(60,2)=1770, C(50,3)=19600, C(35,4)=52k, C(25,5)=53k — still tractable.
+    pool_for_n = {2: 60, 3: 50, 4: 35, 5: 25, 6: 20, 7: 16, 8: 14}
 
     out = []
     seen_signatures: set = set()
