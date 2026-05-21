@@ -1743,13 +1743,12 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
                 "edge_pct": round(edge_pct, 2),
             })
             n_added += 1
-        # Early exit: once we have enough combos from smaller leg counts, stop
-        # searching deeper. Safe style prefers fewer legs anyway.
-        if len(out) >= max_combos * 3:
-            break
+        # No early exit — evaluate every leg count so a safer 5/6/7-leg
+        # combo can beat a 2-leg HR stack on combined probability.
 
-    # Safe: highest combined probability wins; tie-break by fewer legs.
-    out.sort(key=lambda x: (-x["combined_prob"], x["n_legs"]))
+    # Safest first: highest combined probability wins. No leg-count tiebreak,
+    # so a longer combo with truly higher prob is allowed to win.
+    out.sort(key=lambda x: -x["combined_prob"])
     return out[:max_combos]
 
 
