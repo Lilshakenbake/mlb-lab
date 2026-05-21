@@ -26,6 +26,7 @@ BAT_FIELD_MAP = {
     "Total Bases": "totalBases",
     "Home Runs": "homeRuns",
     "RBIs": "rbi",
+    "Stolen Bases": "stolenBases",
 }
 
 # Combo prop: sum of multiple boxscore fields. The "1+ H/R/RBI" prop

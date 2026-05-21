@@ -27,7 +27,7 @@ SPORT = "baseball_mlb"
 REGIONS = "us"
 GAME_MARKETS = "h2h,spreads,totals"
 # Player prop markets (each one is +1 quota unit per event request).
-PROP_MARKETS = "batter_hits,batter_home_runs,batter_total_bases,batter_rbis,pitcher_strikeouts"
+PROP_MARKETS = "batter_hits,batter_home_runs,batter_total_bases,batter_rbis,batter_stolen_bases,pitcher_strikeouts"
 GAME_TTL = 2 * 3600       # 2 hours
 PROP_TTL = 12 * 3600      # 12 hours per game (controls quota burn)
 TIMEOUT = 10
@@ -349,6 +349,7 @@ _PROP_MARKET_MAP = {
     "total_bases": "batter_total_bases",
     "home_runs": "batter_home_runs",
     "rbis": "batter_rbis",
+    "steals": "batter_stolen_bases",
     "strikeouts": "pitcher_strikeouts",
 }
 

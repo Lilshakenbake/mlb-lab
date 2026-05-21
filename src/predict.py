@@ -678,6 +678,73 @@ def _pitcher_adjustment(stat_type, pitcher_hits_allowed):
     return 0.0, "Neutral matchup"
 
 
+def build_steal_prop(player_name, pitcher_name, line, sb_per_g,
+                     opp_pitcher_profile=None, success_rate=None):
+    """Steals prop (typically Over/Under 0.5 SB). Poisson on season SB-rate
+    per game with a small pitcher-handedness bump (runners go more vs LHP
+    because the lefty's back is to first → harder to hold) and a success-rate
+    floor (a 50%-success runner is a worse OVER bet than the raw rate shows).
+
+    Returns same shape as build_hitter_prop so it slots into the plays cache
+    and tracker without special-casing.
+
+    v1 scope: no catcher-CS%, no pitcher pickoff rate, no base-state. Those
+    are real signals (~1-2pp each) but punted to v2 — needs play-by-play.
+    """
+    import math
+
+    lam = max(float(sb_per_g or 0.0), 0.0)
+
+    # Lefties give up ~12% more SBs vs RHP on average (back-to-first geometry).
+    if opp_pitcher_profile and opp_pitcher_profile.get("hand") == "L":
+        lam *= 1.12
+
+    # Success rate floor: a runner converting <70% costs himself attempts —
+    # managers send him less. Discount lambda by how far below 70% he is.
+    # Boost capped at +5% for elite (>85%) runners (managers green-light them).
+    if success_rate is not None:
+        sr = float(success_rate)
+        if sr < 0.70:
+            lam *= max(0.7, sr / 0.70)
+        elif sr > 0.85:
+            lam *= 1.05
+
+    # Poisson: P(>=1) for 0.5 line; P(>=2) for 1.5 line.
+    if line <= 0.5:
+        prob = 1.0 - math.exp(-lam)
+    elif line <= 1.5:
+        prob = 1.0 - math.exp(-lam) - lam * math.exp(-lam)
+    else:
+        prob = 0.0
+
+    projection = round(lam, 3)
+    prob_pct = round(prob * 100, 1)
+
+    # Only surface OVER picks. UNDER 0.5 SB is always priced -300+ at books
+    # so there's no edge there. OVER 0.5 SB is typically priced +200 to +400
+    # (implied 20-33%), so a 25%+ model prob can be +EV when odds confirm.
+    # Real edge gating happens downstream in attach_prop_edges; here we just
+    # surface live candidates with a reasonable model floor.
+    edge = lam - line
+    if prob_pct >= 25 and lam >= 0.20:
+        pick = "OVER"
+    else:
+        pick = "PASS"
+
+    return {
+        "player": player_name,
+        "opp_pitcher": pitcher_name,
+        "stat_type": "steals",
+        "line": line,
+        "projection": projection,
+        "probability": prob_pct,
+        "edge": round(edge, 3),
+        "pick": pick,
+        "model_used": False,
+        "notes": f"SB rate {lam:.2f}/g" + (f", success {success_rate:.0%}" if success_rate else ""),
+    }
+
+
 def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projection,
                       pitcher_hits_allowed, lineup_index, weather, hitter_profile=None,
                       opp_pitcher_profile=None, park_name=None, opp_team=None):

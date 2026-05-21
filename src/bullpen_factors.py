@@ -52,13 +52,39 @@ BULLPEN_FACTORS = {
 }
 
 
-def get_bullpen_factor(team_name):
-    """Return bullpen multipliers dict for the given team, or NEUTRAL if unknown."""
-    if not team_name:
-        return NEUTRAL
-    # Match on substring so "Los Angeles Dodgers" / "LAD" / "Dodgers" all hit.
+def _from_hardcoded(team_name: str):
     name_lower = team_name.lower()
     for key, factors in BULLPEN_FACTORS.items():
         if key.lower() in name_lower:
             return factors
+    return None
+
+
+def get_bullpen_factor(team_name):
+    """Return bullpen multipliers dict for the given team.
+
+    Resolution order:
+      1. LIVE — pulled from MLB Stats API, season-to-date relievers
+         (GS/G < 0.3), 24h cached on disk. Picks up bullpen turnover
+         within a day instead of waiting for a quarterly refresh.
+      2. Hardcoded BULLPEN_FACTORS table (this file).
+      3. NEUTRAL.
+    """
+    if not team_name:
+        return NEUTRAL
+    name_lower = team_name.lower()
+    # --- 1. Live table ---
+    try:
+        from src.bullpen_live import get_live_bullpen_table
+        live = get_live_bullpen_table()
+        if live:
+            for key, factors in live.items():
+                if key.lower() in name_lower or name_lower in key.lower():
+                    return factors
+    except Exception:
+        pass
+    # --- 2. Hardcoded fallback ---
+    hc = _from_hardcoded(team_name)
+    if hc:
+        return hc
     return NEUTRAL

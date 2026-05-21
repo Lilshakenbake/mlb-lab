@@ -23,7 +23,9 @@ from src.predict import (
     compute_hr_threat,
     compute_nrfi,
     build_hrr_combo,
+    build_steal_prop,
 )
+from src.steals_data import get_sb_per_game, get_sb_success_rate, get_league_sb_per_g
 from src import ai_review
 
 PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "16"))
@@ -71,6 +73,7 @@ STAT_LABELS = {
     "total_bases": "Total Bases",
     "home_runs": "Home Runs",
     "rbis": "RBIs",
+    "steals": "Stolen Bases",
     "pitcher_strikeouts": "Strikeouts",
 }
 
@@ -180,7 +183,9 @@ def build_game_boards(game):
     top_total_bases = []
     top_home_runs = []
     top_rbis = []
+    top_steals = []
     top_strikeouts = []
+    league_sb_rate = get_league_sb_per_g()
 
     away_pitcher_name = game.get("away_pitcher", "").strip()
     home_pitcher_name = game.get("home_pitcher", "").strip()
@@ -280,6 +285,22 @@ def build_game_boards(game):
                     )
                     if prop["pick"] != "PASS":
                         bucket.append(prop)
+
+                # Steals prop — only worth projecting for hitters whose
+                # season rate is >=1.5× league avg. Avoids noise on sluggers
+                # who never run (Judge, Stanton, etc).
+                sb_rate = get_sb_per_game(hitter_name)
+                if sb_rate and sb_rate >= league_sb_rate * 1.5:
+                    sb_prop = build_steal_prop(
+                        hitter_name,
+                        opposing_pitcher_name,
+                        0.5,
+                        sb_rate,
+                        opp_pitcher_profile=opposing_profile,
+                        success_rate=get_sb_success_rate(hitter_name),
+                    )
+                    if sb_prop["pick"] != "PASS":
+                        top_steals.append(sb_prop)
 
                 side_score[0] += (
                     hitter_profile.get("hits_avg", 0.0) * 0.8
@@ -394,6 +415,7 @@ def build_game_boards(game):
     sorted_tb = sorted(top_total_bases, key=lambda x: x["probability"], reverse=True)
     sorted_hr_props = sorted(top_home_runs, key=lambda x: x["probability"], reverse=True)
     sorted_rbis = sorted(top_rbis, key=lambda x: x["probability"], reverse=True)
+    sorted_steals = sorted(top_steals, key=lambda x: x["probability"], reverse=True)
     sorted_ks = sorted(top_strikeouts, key=lambda x: x["probability"], reverse=True)
 
     # ── Player-prop edges: lazy fetch (12hr cache) when we have an event_id ──
@@ -407,6 +429,7 @@ def build_game_boards(game):
                 _lo.attach_prop_edges(sorted_tb, event_odds, "total_bases")
                 _lo.attach_prop_edges(sorted_hr_props, event_odds, "home_runs")
                 _lo.attach_prop_edges(sorted_rbis, event_odds, "rbis")
+                _lo.attach_prop_edges(sorted_steals, event_odds, "steals")
                 _lo.attach_prop_edges(sorted_ks, event_odds, "strikeouts", player_field="pitcher")
         except Exception as e:
             print(f"[live-odds] prop attach failed: {e}")
@@ -416,6 +439,7 @@ def build_game_boards(game):
         "top_total_bases": sorted_tb,
         "top_home_runs": sorted_hr_props,
         "top_rbis": sorted_rbis,
+        "top_steals": sorted_steals,
         "top_strikeouts": sorted_ks,
         "spread_lean": spread_lean,
         "total_lean": total_lean,
@@ -455,6 +479,7 @@ def _build_plays_for_game(game):
         ("total_bases", boards.get("top_total_bases", [])),
         ("home_runs", boards.get("top_home_runs", [])),
         ("rbis", boards.get("top_rbis", [])),
+        ("steals", boards.get("top_steals", [])),
     ):
         for prop in prop_list:
             if prop.get("pick") == "PASS":
@@ -1181,6 +1206,7 @@ def _snap_closing_lines_for_pending() -> dict:
         "Home Runs": "batter_home_runs",
         "Total Bases": "batter_total_bases",
         "RBIs": "batter_rbis",
+        "Stolen Bases": "batter_stolen_bases",
         "Strikeouts": "pitcher_strikeouts",
     }
 
