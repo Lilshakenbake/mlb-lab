@@ -468,6 +468,7 @@ def _build_plays_for_game(game):
                 "projection": prop.get("projection"),
                 "edge": prop.get("edge"),
                 "probability": prop.get("probability", 0),
+                "market_edge_pct": prop.get("prop_edge_pct"),
                 "model_used": prop.get("model_used", False),
                 "matchup": matchup,
                 "game_pk": game.get("gamePk"),
@@ -486,6 +487,7 @@ def _build_plays_for_game(game):
             "projection": prop.get("projection"),
             "edge": prop.get("edge"),
             "probability": prop.get("probability", 0),
+            "market_edge_pct": prop.get("prop_edge_pct"),
             "model_used": prop.get("model_used", False),
             "matchup": matchup,
             "game_pk": game.get("gamePk"),
@@ -503,6 +505,7 @@ def _build_plays_for_game(game):
             "projection": prop.get("projection"),
             "edge": prop.get("edge"),
             "probability": prop.get("probability", 0),
+            "market_edge_pct": prop.get("prop_edge_pct"),
             "model_used": prop.get("model_used", False),
             "matchup": matchup,
             "game_pk": game.get("gamePk"),
@@ -1439,12 +1442,46 @@ def _is_game_bettable(game_info: dict, lead_min: int = 0) -> bool:
         return True
 
 
+def _canon_name(name) -> str:
+    """Canonicalize player names so lineup membership survives minor
+    formatting drift between sources: case, punctuation, suffixes
+    (Jr/Jr./III), and accented characters (Ramírez → ramirez).
+    """
+    if not name:
+        return ""
+    import unicodedata, re
+    s = unicodedata.normalize("NFKD", str(name))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.lower()
+    # Strip suffixes like "jr", "jr.", "sr", "ii", "iii", "iv" at end.
+    s = re.sub(r"\b(jr|sr|ii|iii|iv)\.?\b", "", s)
+    s = re.sub(r"[^a-z0-9]+", " ", s).strip()
+    return re.sub(r"\s+", " ", s)
+
+
+def _confirmed_hitters_for_game(game_pk) -> set:
+    """Return union of both sides' confirmed starting hitters for a game
+    as a set of CANONICAL names, or empty set if no lineup posted yet.
+    """
+    try:
+        away = get_confirmed_starting_hitters(game_pk, "away") or []
+        home = get_confirmed_starting_hitters(game_pk, "home") or []
+        return {_canon_name(n) for n in (list(away) + list(home)) if n}
+    except Exception:
+        return set()
+
+
+HITTER_STATS = {"Hits", "Total Bases", "Home Runs", "RBIs", "1+ H/R/RBI",
+                "Home Run"}
+
+
 def _gather_pool(live_only: bool = False) -> list[dict]:
     """Unified pick pool from all caches with the fields the solver needs.
 
-    When `live_only=True`, filters out picks for games that have already
-    started or finished — so a "Bet Now" mid-day request only shows picks
-    on games the user can actually still place a wager on.
+    When `live_only=True`:
+      - drops picks for games that have started/finished or hit 7th inning
+      - drops hitter picks whose player isn't in the confirmed lineup
+        (only once a lineup has been posted — leaves them alone otherwise)
     """
     pool = []
     sched = _load_today_schedule_status() if live_only else {}
@@ -1461,6 +1498,7 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
                 "pick": p.get("pick", "OVER"),
                 "line": p.get("line"),
                 "probability": float(prob),
+                "market_edge_pct": p.get("market_edge_pct"),
                 "matchup": p.get("matchup"),
                 "game_pk": p.get("game_pk"),
                 "source": "play",
@@ -1475,6 +1513,7 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
                 "pick": "OVER",
                 "line": 0.5,
                 "probability": float(prob),
+                "market_edge_pct": None,
                 "matchup": h.get("matchup"),
                 "game_pk": h.get("game_pk"),
                 "source": "hr",
@@ -1489,6 +1528,7 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
                 "pick": "OVER",
                 "line": 0.5,
                 "probability": float(prob),
+                "market_edge_pct": None,
                 "matchup": c.get("matchup"),
                 "game_pk": c.get("game_pk"),
                 "source": "hrr",
@@ -1499,14 +1539,34 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
     # message tells the user to uncheck "Live games only" if they want all.
     if live_only:
         if not sched:
-            pool = []
-        else:
-            # Per-pick fail-closed: if a pick's game_pk isn't in today's
-            # schedule (stale cache, mismatched ID, etc.) drop it — better
-            # than letting an unverifiable pick leak through.
-            pool = [p for p in pool
-                    if p.get("game_pk") in sched
-                    and _is_game_bettable(sched[p.get("game_pk")])]
+            return []
+        # Per-pick fail-closed on schedule.
+        pool = [p for p in pool
+                if p.get("game_pk") in sched
+                and _is_game_bettable(sched[p.get("game_pk")])]
+
+        # ── Confirmed-lineup gate (#1) ─────────────────────────────────
+        # Hitter picks are only valid if the player is in the confirmed
+        # lineup. Lineups are typically posted ~2-3 hrs before first pitch.
+        # If no lineup posted yet, we don't gate (leave picks in pool).
+        lineups_by_game: dict = {}
+        gated = []
+        for p in pool:
+            gpk = p.get("game_pk")
+            is_hitter = (p.get("stat") in HITTER_STATS) or p.get("source") in ("hr", "hrr")
+            if not is_hitter:
+                gated.append(p)
+                continue
+            if gpk not in lineups_by_game:
+                lineups_by_game[gpk] = _confirmed_hitters_for_game(gpk)
+            lineup = lineups_by_game[gpk]
+            if not lineup:
+                gated.append(p)  # no lineup posted yet → keep
+                continue
+            if _canon_name(p.get("player")) in lineup:
+                gated.append(p)
+        pool = gated
+
     # De-dupe: same player + same game (HR + HRR for the same hitter) — keep
     # highest probability variant per (player, game) so we don't stack
     # correlated legs on the same hitter.
@@ -1517,6 +1577,23 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
         if cur is None or pk["probability"] > cur["probability"]:
             best_by_key[key] = pk
     return list(best_by_key.values())
+
+
+def _composite_score(pick: dict) -> float:
+    """Ranking score that boosts picks where the market disagrees with us.
+
+    score = probability * (1 + max(0, market_edge_pct) / 100)
+
+    A pick we model at 65% the market prices at +120 (implied 45%) has a
+    large positive edge → boosted above a 70% pick the market has at -250
+    (implied 71%, ~0 edge). Picks without market edge data fall through
+    at raw probability (neutral).
+    """
+    prob = pick.get("probability") or 0.0
+    edge = pick.get("market_edge_pct")
+    if edge is None or edge <= 0:
+        return float(prob)
+    return float(prob) * (1.0 + edge / 100.0)
 
 
 def _solve_challenge(pool: list[dict], stake: float, target_today: float,
@@ -1552,7 +1629,10 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
     # the smallest viable n (Safe style prefers fewer legs).
     for n in range(2, max_legs + 1):
         size = pool_for_n.get(n, 12)
-        top = sorted(pool, key=lambda x: x["probability"], reverse=True)[:size]
+        # Rank by composite score (prob × market edge) instead of raw prob.
+        # Real parlay math still uses actual probability — composite only
+        # decides which picks make the top-N candidate pool.
+        top = sorted(pool, key=_composite_score, reverse=True)[:size]
         if len(top) < n:
             continue
         n_added = 0

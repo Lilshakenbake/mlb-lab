@@ -211,7 +211,10 @@ def get_confirmed_starting_hitters(game_pk, side):
         return names
 
     except Exception:
-        GameHittersCache[cache_key] = []
+        # Don't memoize transient fetch failures — if the MLB API blips
+        # we'd otherwise lock in "no lineup" for the process lifetime,
+        # silently disabling the lineup gate for that game. Returning []
+        # without caching lets the next caller retry.
         return []
 
 
