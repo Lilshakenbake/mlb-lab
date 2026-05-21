@@ -245,7 +245,7 @@ def get_team_active_hitters(team_id):
         return []
 
 
-def _get_batter_statcast(player_name, days_back=45):
+def _get_batter_statcast(player_name, days_back=90):
     player_id, error = _lookup_player_id(player_name)
     if error:
         return None, error
@@ -316,51 +316,78 @@ def get_last5_hitter_profile(player_name):
 
         grouped = df.groupby("game_date")
 
-        # Bigger window (8 games) cuts single-game noise without any new HTTP.
-        hits_by_game = grouped["events"].apply(
+        # ── Pull season + L15 windows from the same DF (90d pull) ─────────
+        # We compute every per-game series across the FULL season window,
+        # then build the projection as a blend of L15 (recent form) and the
+        # full window (true-talent baseline). 60/40 L15/season is the
+        # Tango / THE BOOK in-season weighting — small enough sample on
+        # recent form to catch hot/cold, big enough baseline to ignore
+        # week-long noise (flu, BABIP variance, etc).
+        hits_full = grouped["events"].apply(
             lambda x: x.isin(["single", "double", "triple", "home_run"]).sum()
-        ).tail(8)
-
-        hr_by_game = grouped["events"].apply(
+        )
+        hr_full = grouped["events"].apply(
             lambda x: x.isin(["home_run"]).sum()
-        ).tail(8)
-
-        tb_by_game = grouped["events"].apply(
+        )
+        tb_full = grouped["events"].apply(
             lambda x: (
                 (x == "single").sum() * 1
                 + (x == "double").sum() * 2
                 + (x == "triple").sum() * 3
                 + (x == "home_run").sum() * 4
             )
-        ).tail(8)
-
+        )
         if "rbi" in df.columns:
             rbi_col = pd.to_numeric(df["rbi"], errors="coerce").fillna(0)
             temp = df.copy()
             temp["rbi_num"] = rbi_col
-            rbi_by_game = temp.groupby("game_date")["rbi_num"].sum().tail(8)
+            rbi_full = temp.groupby("game_date")["rbi_num"].sum()
         else:
-            rbi_by_game = (hits_by_game * 0.35 + hr_by_game * 0.65 + tb_by_game * 0.10).tail(8)
+            rbi_full = hits_full * 0.35 + hr_full * 0.65 + tb_full * 0.10
 
-        if len(hits_by_game) == 0:
+        if len(hits_full) == 0:
             return None, "No recent games found"
 
-        # ── Recency weighting: last 3 games count 2x ──────────────────────
-        # A guy on a 7-for-9 tear should NOT be averaged with a cold week.
-        # Weights: last 3 games × 2.0, prior 5 × 1.0  → catches streaks early.
-        def _weighted_mean(series):
-            if len(series) == 0:
-                return 0.0
-            n = len(series)
-            weights = [2.0 if i >= max(0, n - 3) else 1.0 for i in range(n)]
-            total_weight = sum(weights)
-            return sum(float(v) * w for v, w in zip(series, weights)) / total_weight
+        # L15 = last 15 games; "season" = everything in the 90d window
+        # (typically 45-70 games depending on rest days / IL stints).
+        def _season_l15_blend(full_series, l15_weight=0.60):
+            """Blend last-15 form with full-window baseline.
 
-        # Hot-streak: last 3 vs overall window. >1 = hot, <1 = cold.
-        last3 = hits_by_game.tail(3)
-        hits_overall = float(hits_by_game.mean()) or 0.0
-        last3_mean = float(last3.mean()) if len(last3) else hits_overall
-        hot_ratio = (last3_mean / hits_overall) if hits_overall > 0 else 1.0
+            Falls back gracefully when sample is thin: if we have <15
+            games we just use what we have for L15; if we have <5 we
+            skip the blend and use the full series only.
+            """
+            if len(full_series) == 0:
+                return 0.0
+            season_mean = float(full_series.mean())
+            if len(full_series) < 5:
+                return season_mean
+            l15_mean = float(full_series.tail(15).mean())
+            return l15_weight * l15_mean + (1.0 - l15_weight) * season_mean
+
+        # Per-stat blended means (these REPLACE the old weighted_mean output
+        # but keep the same field names so predict.py needs no changes).
+        hits_blend = _season_l15_blend(hits_full)
+        hr_blend = _season_l15_blend(hr_full)
+        tb_blend = _season_l15_blend(tb_full)
+        rbi_blend = _season_l15_blend(rbi_full)
+
+        # Hot-ratio rebuilt: L15 vs season baseline (was L3 vs L8 — too
+        # noisy, often false-positive on a 2-game heater). L15 vs season
+        # is a real form signal.
+        season_hits = float(hits_full.mean()) or 0.0
+        l15_hits = float(hits_full.tail(15).mean()) if len(hits_full) >= 5 else season_hits
+        hot_ratio = (l15_hits / season_hits) if season_hits > 0 else 1.0
+
+        # Diagnostic fields so the dashboard / future tuning can see the
+        # raw L15 and season numbers behind the blend.
+        diag_hits_l15 = l15_hits
+        diag_hits_season = season_hits
+
+        # Keep an alias so downstream code referencing these names stays sane.
+        hits_by_game = hits_full
+        hr_by_game = hr_full
+        tb_by_game = tb_full
 
         # ── Statcast expected stats (xStats): strip out luck. ─────────────
         # `type` is "X" for batted balls, "S"/"B" for swings/balls. xBA and
@@ -373,11 +400,15 @@ def get_last5_hitter_profile(player_name):
             df.get("estimated_woba_using_speedangle"), errors="coerce"
         ).dropna() if "estimated_woba_using_speedangle" in df.columns else None
 
-        bbe_per_game = (
-            (df["type"] == "X").groupby(df["game_date"]).sum().tail(8).mean()
-            if "type" in df.columns else None
-        )
-        pa_per_game = float(df.groupby("game_date").size().tail(8).mean())
+        # bbe/pa per game: blend L15 with full window like the counting stats
+        # so a guy whose lineup spot changed (3→8) doesn't get a stale PA est.
+        if "type" in df.columns:
+            bbe_series = (df["type"] == "X").groupby(df["game_date"]).sum()
+            bbe_per_game = _season_l15_blend(bbe_series)
+        else:
+            bbe_per_game = None
+        pa_series = df.groupby("game_date").size()
+        pa_per_game = _season_l15_blend(pa_series)
 
         xhits_avg = (
             float(xba_per_bbe.mean()) * float(bbe_per_game)
@@ -453,17 +484,24 @@ def get_last5_hitter_profile(player_name):
         ) else None
 
         profile = {
-            "hits_avg": round(_weighted_mean(hits_by_game), 2),
-            "hr_avg": round(_weighted_mean(hr_by_game), 2),
-            "tb_avg": round(_weighted_mean(tb_by_game), 2),
-            "rbi_avg": round(_weighted_mean(rbi_by_game), 2),
+            # Headline averages = L15 (60%) + season (40%) blend.
+            "hits_avg": round(hits_blend, 2),
+            "hr_avg": round(hr_blend, 2),
+            "tb_avg": round(tb_blend, 2),
+            "rbi_avg": round(rbi_blend, 2),
+            # Stds still computed over full window for stability.
             "hits_std": round(float(hits_by_game.std() or 0.0), 2),
             "tb_std": round(float(tb_by_game.std() or 0.0), 2),
             "iso_power": round(iso_power, 3),
             "contact_rate": round(contact_rate, 3) if contact_rate is not None else None,
             "hand": _safe_hand(df, "stand"),  # L/R/S
-            "hot_ratio": round(hot_ratio, 2),
+            "hot_ratio": round(hot_ratio, 2),  # now L15/season, not L3/L8
             "games_used": int(len(hits_by_game)),
+            # Diagnostics — surface so we can audit blend behavior later.
+            "hits_l15_avg": round(diag_hits_l15, 2),
+            "hits_season_avg": round(diag_hits_season, 2),
+            "games_l15": int(min(15, len(hits_by_game))),
+            "games_season": int(len(hits_by_game)),
             # xStats — luck-stripped projections for the predictor.
             "xhits_avg": round(xhits_avg, 3) if xhits_avg is not None else None,
             "xtb_avg": round(xtb_avg, 3) if xtb_avg is not None else None,
@@ -498,32 +536,34 @@ def get_last5_pitcher_profile(pitcher_name):
 
         grouped = df.groupby("game_date")
 
+        # Full window (60d ≈ 11-12 starts) = "season" baseline.
         hits_allowed_by_game = grouped["events"].apply(
             lambda x: x.isin(["single", "double", "triple", "home_run"]).sum()
-        ).tail(8)
-
+        )
         strikeouts_by_game = grouped["events"].apply(
             lambda x: x.isin(["strikeout", "strikeout_double_play"]).sum()
-        ).tail(8)
+        )
 
         if len(strikeouts_by_game) == 0:
             return None, "No recent pitcher games found"
 
-        # ── Recency weighting for pitchers: last 3 starts count 2x ────────
-        # A pitcher coming off two gems vs his last 8 = different threat.
-        def _weighted_mean(series):
-            if len(series) == 0:
+        # ── L5-starts vs season blend for pitchers ───────────────────────
+        # Pitchers go every 5th day, so L15 doesn't make sense — L5 starts
+        # ≈ 25 days of starts. Same logic as hitters but smaller recent
+        # window. Still 60/40 weighting on recent vs full.
+        def _season_l5_blend(full_series, recent_weight=0.60):
+            if len(full_series) == 0:
                 return 0.0
-            n = len(series)
-            weights = [2.0 if i >= max(0, n - 3) else 1.0 for i in range(n)]
-            total_weight = sum(weights)
-            return sum(float(v) * w for v, w in zip(series, weights)) / total_weight
+            season_mean = float(full_series.mean())
+            if len(full_series) < 4:
+                return season_mean
+            l5_mean = float(full_series.tail(5).mean())
+            return recent_weight * l5_mean + (1.0 - recent_weight) * season_mean
 
         # ── Power-allowed metrics — separate aces from contact-friendly arms ──
-        # Pulled from the SAME Statcast DF, no new HTTP.
         hr_allowed_by_game = grouped["events"].apply(
             lambda x: x.isin(["home_run"]).sum()
-        ).tail(8)
+        )
         tb_allowed_by_game = grouped["events"].apply(
             lambda x: (
                 (x == "single").sum() * 1
@@ -531,7 +571,7 @@ def get_last5_pitcher_profile(pitcher_name):
                 + (x == "triple").sum() * 3
                 + (x == "home_run").sum() * 4
             )
-        ).tail(8)
+        )
 
         bbe_p = df[df["type"] == "X"] if "type" in df.columns else df
         xwoba_allowed = pd.to_numeric(
@@ -570,7 +610,10 @@ def get_last5_pitcher_profile(pitcher_name):
                     except Exception:
                         continue
                 if runs_per_start:
-                    runs_per_start = runs_per_start[-8:]  # last 8 starts only
+                    # Use full window for NRFI rate — bigger sample = more
+                    # stable scoreless% (was tail-8). Recency form gets
+                    # captured by the L5 blend on the counting stats above.
+                    runs_per_start = runs_per_start[-12:]
                     first_inning_runs_avg = round(sum(runs_per_start) / len(runs_per_start), 2)
                     nrfi_solo_rate = round(
                         sum(1 for r in runs_per_start if r == 0) / len(runs_per_start), 3
@@ -614,10 +657,19 @@ def get_last5_pitcher_profile(pitcher_name):
                 }
 
         profile = {
-            "hits_allowed_avg": round(_weighted_mean(hits_allowed_by_game), 2),
-            "tb_allowed_avg": round(_weighted_mean(tb_allowed_by_game), 2),
-            "hr_allowed_avg": round(_weighted_mean(hr_allowed_by_game), 3),
-            "strikeouts_avg": round(_weighted_mean(strikeouts_by_game), 2),
+            # L5-starts (60%) + season (40%) blend.
+            "hits_allowed_avg": round(_season_l5_blend(hits_allowed_by_game), 2),
+            "tb_allowed_avg": round(_season_l5_blend(tb_allowed_by_game), 2),
+            "hr_allowed_avg": round(_season_l5_blend(hr_allowed_by_game), 3),
+            "strikeouts_avg": round(_season_l5_blend(strikeouts_by_game), 2),
+            # Diagnostics for tuning audit.
+            "strikeouts_l5_avg": round(
+                float(strikeouts_by_game.tail(5).mean()) if len(strikeouts_by_game) >= 4
+                else float(strikeouts_by_game.mean()), 2
+            ),
+            "strikeouts_season_avg": round(float(strikeouts_by_game.mean()), 2),
+            "starts_used_l5": int(min(5, len(strikeouts_by_game))),
+            "starts_used_season": int(len(strikeouts_by_game)),
             "k_std": round(float(strikeouts_by_game.std() or 0.0), 2),
             "xwoba_allowed": round(float(xwoba_allowed.mean()), 3) if xwoba_allowed is not None and len(xwoba_allowed) else None,
             "hard_hit_allowed": round(hard_hit_allowed, 3) if hard_hit_allowed is not None else None,
