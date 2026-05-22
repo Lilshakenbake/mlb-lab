@@ -1883,10 +1883,18 @@ def _solve_lotto(pool: list[dict], stake: float, target_today: float) -> list[di
         else:
             boost_n = total_games
 
+    # Sportsbook reality: DK/FD/MGM cap parlays at 25 legs. Anything
+    # bigger can't actually be placed, so clamp Max Lotto at the book
+    # ceiling. Min/Boost might collapse into Max on small slates — the
+    # seen_n dedupe below handles that cleanly.
+    SPORTSBOOK_MAX_LEGS = 25
+    max_n = min(total_games, SPORTSBOOK_MAX_LEGS)
+    min_n = min(min_n, max_n)
+    boost_n = min(boost_n, max_n)
     variants = [
-        ("Min legs",   min_n,        "Smallest parlay that hits your target."),
-        ("Boost",      boost_n,      "Extra cushion — bigger payout, similar legs."),
-        ("Max Lotto",  total_games,  f"Every leg available ({total_games}, up to 3/game). Moonshot."),
+        ("Min legs",   min_n,    "Smallest parlay that hits your target."),
+        ("Boost",      boost_n,  "Extra cushion — bigger payout, similar legs."),
+        ("Max Lotto",  max_n,    f"Max placeable parlay ({max_n} legs, sportsbook cap). Moonshot."),
     ]
 
     # Dedupe by n (Min/Boost/Max can collapse on tiny slates).
