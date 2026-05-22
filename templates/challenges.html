@@ -244,6 +244,7 @@
     <div class="mode-tabs">
         <button class="mode-tab active" id="tab-now"    onclick="switchMode('now')">⚡ Bet Now</button>
         <button class="mode-tab"        id="tab-ladder" onclick="switchMode('ladder')">🪜 Ladder Climb</button>
+        <button class="mode-tab"        id="tab-lotto"  onclick="switchMode('lotto')">🎰 Lotto</button>
     </div>
 
     <!-- BET NOW MODE -->
@@ -275,6 +276,42 @@
             </div>
         </div>
         <div class="err" id="now-err"></div>
+    </div>
+
+    <!-- LOTTO MODE -->
+    <div class="card" id="mode-lotto-card" style="display:none;">
+        <h2>🎰 Aggressive lotto — one leg per game</h2>
+        <p style="font-size:13px; color:var(--muted); margin:-4px 0 12px;">
+            Takes the best pick from every game on tonight's slate and stacks them
+            into one mega-parlay. Higher variance, way bigger payout. Use this when
+            you want to torch your bankroll up fast.
+        </p>
+        <div class="preset-row">
+            <button class="preset" onclick="lottoPreset(5,50)">$5 → $50</button>
+            <button class="preset" onclick="lottoPreset(10,200)">$10 → $200</button>
+            <button class="preset" onclick="lottoPreset(20,500)">$20 → $500</button>
+            <button class="preset" onclick="lottoPreset(50,2000)">$50 → $2K</button>
+        </div>
+        <div class="form-grid">
+            <div>
+                <label>Your bankroll</label>
+                <input type="number" id="lotto-stake" placeholder="20" inputmode="decimal" step="0.01" min="0.01">
+            </div>
+            <div>
+                <label>Want to win (total)</label>
+                <input type="number" id="lotto-target" placeholder="500" inputmode="decimal" step="0.01" min="0.01">
+            </div>
+            <div class="full" style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted);">
+                <input type="checkbox" id="lotto-live" checked style="width:auto;">
+                <label for="lotto-live" style="margin:0; text-transform:none; letter-spacing:0; font-size:13px;">
+                    Live games only (skip games that already started)
+                </label>
+            </div>
+            <div class="full">
+                <button class="btn" id="lotto-btn" onclick="playLotto()">🎰 Build my lotto ticket</button>
+            </div>
+        </div>
+        <div class="err" id="lotto-err"></div>
     </div>
 
     <!-- LADDER MODE -->
@@ -331,16 +368,76 @@ const MODE_KEY = "mlblab.mode.v1";
 function switchMode(m) {
     document.getElementById("tab-now").classList.toggle("active", m === "now");
     document.getElementById("tab-ladder").classList.toggle("active", m === "ladder");
-    document.getElementById("mode-now-card").style.display = m === "now" ? "" : "none";
+    document.getElementById("tab-lotto").classList.toggle("active", m === "lotto");
+    document.getElementById("mode-now-card").style.display    = m === "now"    ? "" : "none";
     document.getElementById("mode-ladder-card").style.display = m === "ladder" ? "" : "none";
-    // Hide ladder-specific panels in Bet Now mode
-    if (m === "now") {
+    document.getElementById("mode-lotto-card").style.display  = m === "lotto"  ? "" : "none";
+    // Hide ladder-specific panels when not in ladder mode
+    if (m !== "ladder") {
         document.getElementById("ladder-viz").style.display = "none";
         document.getElementById("status-panel").style.display = "none";
         document.getElementById("history-card").style.display = "none";
         document.getElementById("combos").innerHTML = "";
     }
     localStorage.setItem(MODE_KEY, m);
+}
+
+function lottoPreset(stake, target) {
+    document.getElementById("lotto-stake").value = stake;
+    document.getElementById("lotto-target").value = target;
+}
+
+async function playLotto() {
+    const stake = parseFloat(document.getElementById("lotto-stake").value || "0");
+    const target = parseFloat(document.getElementById("lotto-target").value || "0");
+    const liveOnly = document.getElementById("lotto-live").checked;
+    const err = document.getElementById("lotto-err");
+    err.textContent = "";
+    if (stake <= 0 || target <= 0) { err.textContent = "Enter both bankroll and target above 0."; return; }
+    if (target <= stake) { err.textContent = "Target must be larger than bankroll."; return; }
+    const btn = document.getElementById("lotto-btn");
+    btn.disabled = true; btn.textContent = "🎰 Loading every game…";
+    try {
+        const res = await fetch("/api/lotto", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({bankroll: stake, target: target, live_only: liveOnly}),
+        });
+        const data = await res.json();
+        renderLottoStatus(data, stake, target, liveOnly);
+        renderCombos(data);
+    } catch (e) {
+        err.textContent = `Error: ${e}`;
+    } finally {
+        btn.disabled = false; btn.textContent = "🎰 Build my lotto ticket";
+    }
+}
+
+function renderLottoStatus(data, stake, target, liveOnly) {
+    const panel = document.getElementById("status-panel");
+    if (!data.ok) {
+        panel.innerHTML = `<div class="card"><div class="err">${escape(data.error || "Error")}</div></div>`;
+        panel.style.display = "block"; return;
+    }
+    const ctx = data.context || {};
+    const ra = ctx.required_american || 0;
+    const games = ctx.games_with_picks || 0;
+    const gameInfo = liveOnly && ctx.games_total
+        ? ` · ${ctx.games_bettable}/${ctx.games_total} games open`
+        : "";
+    panel.innerHTML = `
+        <div class="card">
+            <h2>🎰 ${fmtMoney(stake)} → ${fmtMoney(target)} ${difficultyBadge(ra)}</h2>
+            <div class="stat-grid">
+                <div class="stat"><div class="label">Stake</div><div class="val">${fmtMoney(stake)}</div></div>
+                <div class="stat"><div class="label">Need profit</div><div class="val gold">+${fmtMoney(ctx.profit_needed)}</div></div>
+                <div class="stat"><div class="label">Games on ticket</div><div class="val good">${games}</div></div>
+            </div>
+            <div style="font-size:11px; color:var(--muted); text-align:center;">
+                pulling 1 best leg from each game${gameInfo}
+                ${data.computing ? " · ⏳ slate still computing" : ""}
+            </div>
+        </div>`;
+    panel.style.display = "block";
 }
 
 function quickPreset(stake, target) {

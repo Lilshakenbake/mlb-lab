@@ -1784,10 +1784,192 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
     return out[:max_combos]
 
 
+def _solve_lotto(pool: list[dict], stake: float, target_today: float) -> list[dict]:
+    """Aggressive 'one leg per game' lotto parlays.
+
+    Picks the highest-calibrated-prob leg from every distinct game on the
+    slate, sorts those game-bests by prob desc, then builds three combos:
+      - "Min"  : smallest n that clears the required payout
+      - "Boost": ~2× the required payout (extra cushion / bigger win)
+      - "Max"  : every game on the slate (ultimate lotto)
+    All three are guaranteed one-leg-per-game so there's no within-game
+    correlation. Uses the same calibrated probabilities as the safe solver
+    so the displayed combined odds stay honest.
+    """
+    from math import prod
+
+    if stake <= 0 or target_today <= 0 or not pool:
+        return []
+    required_decimal = (stake + target_today) / stake
+
+    # Best leg per game by calibrated probability. Composite score (prob ×
+    # market_edge) is a nice-to-have but for lotto we want raw safety on
+    # each game pick — market edge can stay flat in this aggressive mode.
+    best_by_game: dict = {}
+    for p in pool:
+        gpk = p.get("game_pk")
+        if gpk is None:
+            continue
+        cp = _calibrated_probability(p)
+        if cp <= 0:
+            continue
+        cur = best_by_game.get(gpk)
+        if cur is None or cp > cur[0]:
+            best_by_game[gpk] = (cp, p)
+
+    if len(best_by_game) < 2:
+        return []
+
+    # Sort game-bests by prob desc — safest legs go in the front of the
+    # cumulative parlay so the Min variant stays as safe as possible.
+    ranked = sorted(best_by_game.values(), key=lambda t: -t[0])
+    total_games = len(ranked)
+
+    # Build cumulative combos. For each n from 2..total_games, compute the
+    # parlay of the top-n game-bests.
+    cumulative = []
+    cum_dec = 1.0
+    cum_prob = 1.0
+    for cp, pick in ranked:
+        cum_dec *= (100.0 / cp)
+        cum_prob *= (cp / 100.0)
+        cumulative.append({
+            "n": len(cumulative) + 1,  # placeholder, fixed below
+            "dec": cum_dec,
+            "prob": cum_prob,
+            "pick": pick,
+            "cp": cp,
+        })
+    for i, c in enumerate(cumulative):
+        c["n"] = i + 1
+
+    # Pick three target sizes:
+    min_n = None
+    for c in cumulative:
+        if c["n"] >= 2 and c["dec"] >= required_decimal:
+            min_n = c["n"]
+            break
+    if min_n is None:
+        # Even all-games doesn't hit the target. Show max anyway so the
+        # user sees what's achievable and can adjust.
+        min_n = total_games
+
+    boost_n = min(total_games, max(min_n + 1, int(min_n * 1.5)))
+    if cumulative[boost_n - 1]["dec"] < required_decimal * 1.6 and boost_n < total_games:
+        # Walk forward until we hit ~2× target payout or run out of games.
+        for c in cumulative[boost_n - 1:]:
+            if c["dec"] >= required_decimal * 2.0:
+                boost_n = c["n"]
+                break
+        else:
+            boost_n = total_games
+
+    variants = [
+        ("Min legs",   min_n,        "Smallest parlay that hits your target."),
+        ("Boost",      boost_n,      "Extra cushion — bigger payout, similar legs."),
+        ("Max Lotto",  total_games,  f"Every game on the slate ({total_games}). Moonshot."),
+    ]
+
+    # Dedupe by n (Min/Boost/Max can collapse on tiny slates).
+    seen_n: set = set()
+    out = []
+    for label, n, blurb in variants:
+        if n in seen_n or n < 2:
+            continue
+        seen_n.add(n)
+        legs_data = cumulative[n - 1]
+        legs_picks = [c["pick"] for c in cumulative[:n]]
+        legs_cps   = [c["cp"]   for c in cumulative[:n]]
+        dec = legs_data["dec"]
+        prob = legs_data["prob"]
+        payout = stake * dec
+        ev = prob * (payout - stake) - (1 - prob) * stake
+        edge_pct = (ev / stake) * 100 if stake > 0 else 0
+        out.append({
+            "label": label,
+            "blurb": blurb,
+            "n_legs": n,
+            "legs": [{
+                "player": p.get("player"),
+                "stat": p.get("stat"),
+                "pick": p.get("pick"),
+                "line": p.get("line"),
+                "probability": round(cp, 1),
+                "fair_american": _decimal_to_american(100.0 / cp),
+                "matchup": p.get("matchup"),
+            } for p, cp in zip(legs_picks, legs_cps)],
+            "combined_prob": round(prob * 100, 2),
+            "combined_decimal": round(dec, 2),
+            "combined_american": _decimal_to_american(dec),
+            "stake": round(stake, 2),
+            "payout": round(payout, 2),
+            "profit": round(payout - stake, 2),
+            "expected_value": round(ev, 2),
+            "edge_pct": round(edge_pct, 2),
+            "hits_target": dec >= required_decimal,
+        })
+    return out
+
+
 @app.route("/challenges", methods=["GET"])
 @login_required
 def challenges_page():
     return render_template("challenges.html")
+
+
+@app.route("/api/lotto", methods=["POST"])
+@login_required
+def api_lotto():
+    """Aggressive lotto mode — one leg from every game on the slate.
+
+    Body: {bankroll: float, target: float, live_only: bool}
+    Returns up to 3 cumulative parlays (Min legs / Boost / Max Lotto).
+    """
+    body = request.get_json(silent=True) or {}
+    try:
+        bankroll = float(body.get("bankroll", 0))
+        target = float(body.get("target", 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bankroll/target must be numbers"}), 400
+    if bankroll <= 0 or target <= 0:
+        return jsonify({"ok": False, "error": "Enter bankroll and target > 0"}), 400
+    if target <= bankroll:
+        return jsonify({"ok": False, "error": "Target must be larger than bankroll"}), 400
+
+    _ensure_plays_refresh()
+    live_only = bool(body.get("live_only", False))
+    pool = _gather_pool(live_only=live_only)
+
+    games_total = 0
+    games_bettable = 0
+    if live_only:
+        sched = _load_today_schedule_status()
+        games_total = len(sched)
+        games_bettable = sum(1 for v in sched.values() if _is_game_bettable(v))
+
+    profit_needed = target - bankroll
+    base_ctx = {
+        "bankroll": bankroll,
+        "target": target,
+        "profit_needed": round(profit_needed, 2),
+        "pool_size": len(pool),
+        "games_with_picks": len({p.get("game_pk") for p in pool if p.get("game_pk")}),
+        "required_american": _decimal_to_american((bankroll + profit_needed) / bankroll),
+        "live_only": live_only,
+        "games_total": games_total,
+        "games_bettable": games_bettable,
+    }
+    if not pool:
+        return jsonify({
+            "ok": True, "computing": PLAYS_CACHE["computing"],
+            "message": "Slate still computing — try again in ~1 minute.",
+            "combos": [], "context": base_ctx,
+        })
+    combos = _solve_lotto(pool, bankroll, profit_needed)
+    return jsonify({
+        "ok": True, "computing": PLAYS_CACHE["computing"],
+        "context": base_ctx, "combos": combos,
+    })
 
 
 @app.route("/api/challenge", methods=["POST"])
