@@ -1802,10 +1802,13 @@ def _solve_lotto(pool: list[dict], stake: float, target_today: float) -> list[di
         return []
     required_decimal = (stake + target_today) / stake
 
-    # Best leg per game by calibrated probability. Composite score (prob ×
-    # market_edge) is a nice-to-have but for lotto we want raw safety on
-    # each game pick — market edge can stay flat in this aggressive mode.
-    best_by_game: dict = {}
+    # Lotto = AGGRESSIVE. Take up to 3 best legs PER GAME (not just 1).
+    # Yes this is intentionally correlated within a game — that's the
+    # whole point of lotto. The safe solver enforces 1-per-game; this
+    # mode embraces stacking the same game for max payout. De-dupe on
+    # (player, stat) so we don't double-count the same prop.
+    LOTTO_LEGS_PER_GAME = 3
+    by_game: dict = {}
     for p in pool:
         gpk = p.get("game_pk")
         if gpk is None:
@@ -1813,16 +1816,32 @@ def _solve_lotto(pool: list[dict], stake: float, target_today: float) -> list[di
         cp = _calibrated_probability(p)
         if cp <= 0:
             continue
-        cur = best_by_game.get(gpk)
-        if cur is None or cp > cur[0]:
-            best_by_game[gpk] = (cp, p)
+        by_game.setdefault(gpk, []).append((cp, p))
 
-    if len(best_by_game) < 2:
+    if not by_game:
         return []
 
-    # Sort game-bests by prob desc — safest legs go in the front of the
-    # cumulative parlay so the Min variant stays as safe as possible.
-    ranked = sorted(best_by_game.values(), key=lambda t: -t[0])
+    picked: list[tuple] = []
+    for gpk, legs in by_game.items():
+        legs.sort(key=lambda t: -t[0])
+        seen_props: set = set()
+        kept = 0
+        for cp, p in legs:
+            key = (p.get("player"), p.get("stat"))
+            if key in seen_props:
+                continue
+            seen_props.add(key)
+            picked.append((cp, p))
+            kept += 1
+            if kept >= LOTTO_LEGS_PER_GAME:
+                break
+
+    if len(picked) < 2:
+        return []
+
+    # Sort the full pool of game-picks by calibrated prob desc — safest
+    # legs go first so Min variant stays as tight as the math allows.
+    ranked = sorted(picked, key=lambda t: -t[0])
     total_games = len(ranked)
 
     # Build cumulative combos. For each n from 2..total_games, compute the
@@ -1867,7 +1886,7 @@ def _solve_lotto(pool: list[dict], stake: float, target_today: float) -> list[di
     variants = [
         ("Min legs",   min_n,        "Smallest parlay that hits your target."),
         ("Boost",      boost_n,      "Extra cushion — bigger payout, similar legs."),
-        ("Max Lotto",  total_games,  f"Every game on the slate ({total_games}). Moonshot."),
+        ("Max Lotto",  total_games,  f"Every leg available ({total_games}, up to 3/game). Moonshot."),
     ]
 
     # Dedupe by n (Min/Boost/Max can collapse on tiny slates).

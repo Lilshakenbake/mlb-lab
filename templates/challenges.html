@@ -280,11 +280,11 @@
 
     <!-- LOTTO MODE -->
     <div class="card" id="mode-lotto-card" style="display:none;">
-        <h2>🎰 Aggressive lotto — one leg per game</h2>
+        <h2>🎰 Aggressive lotto — up to 3 legs per game</h2>
         <p style="font-size:13px; color:var(--muted); margin:-4px 0 12px;">
-            Takes the best pick from every game on tonight's slate and stacks them
-            into one mega-parlay. Higher variance, way bigger payout. Use this when
-            you want to torch your bankroll up fast.
+            Takes the top 3 picks from every game on tonight's slate and stacks them
+            into one mega-parlay. Correlated stacking on purpose — this is a moonshot,
+            not a safe play. Use when you want to torch your bankroll up fast.
         </p>
         <div class="preset-row">
             <button class="preset" onclick="lottoPreset(5,50)">$5 → $50</button>
@@ -433,7 +433,7 @@ function renderLottoStatus(data, stake, target, liveOnly) {
                 <div class="stat"><div class="label">Games on ticket</div><div class="val good">${games}</div></div>
             </div>
             <div style="font-size:11px; color:var(--muted); text-align:center;">
-                pulling 1 best leg from each game${gameInfo}
+                pulling up to 3 best legs per game${gameInfo}
                 ${data.computing ? " · ⏳ slate still computing" : ""}
             </div>
         </div>`;
