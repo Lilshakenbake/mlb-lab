@@ -933,10 +933,12 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     else:
         probability = edge_to_probability(stat_type, edge)
 
-    # ── Confidence cap: a single-game prop with a tiny sample of stats
-    # should NEVER read like a 90% lock. Keep the displayed probability in
-    # the realistic range so the user never bets the farm on overfit noise.
-    probability = max(min(probability, 78.0), 22.0)
+    # ── Confidence cap: raised 78→92 because the old ceiling was hiding
+    # legit locks AND getting double-penalized by _calibrated_probability
+    # in the solver (×0.92 on 65-80 band hitter props). True 88-92% picks
+    # need to flow through so safe-style parlays don't artificially need
+    # more legs. Floor at 22% keeps fade-the-trash side honest.
+    probability = max(min(probability, 92.0), 22.0)
 
     note_parts = [matchup_note, weather_note]
     if factor_bits:
@@ -996,8 +998,8 @@ def build_pitcher_k_prop(pitcher_name, line, projection, weather, pitcher_profil
     else:
         probability = edge_to_probability("pitcher_strikeouts", edge)
 
-    # Confidence cap — same reasoning as hitter props.
-    probability = max(min(probability, 78.0), 22.0)
+    # Confidence cap — same reasoning as hitter props (raised 78→92).
+    probability = max(min(probability, 92.0), 22.0)
 
     return {
         "pitcher": pitcher_name,
@@ -1400,7 +1402,7 @@ def build_hrr_combo(player_name, hitter_profile, opp_pitcher_profile, lineup_idx
     # fair_odds so the displayed probability and implied odds match.
     pick = "OVER" if union_prob >= 0.55 else "PASS"
     edge = round(union_prob - 0.50, 2)
-    capped_prob = max(0.22, min(0.78, union_prob))
+    capped_prob = max(0.22, min(0.92, union_prob))
     probability = round(capped_prob * 100, 1)
 
     why_bits = []

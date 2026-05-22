@@ -44,6 +44,10 @@ PLAYS_CACHE = {"ts": 0, "data": [], "computing": False}
 # PASS. Drives the challenge solver so the parlay search can consider the
 # FULL catalog, not just the ~20 plays the dashboard displays.
 RAW_PLAYS_CACHE = {"ts": 0, "data": []}
+# Same pattern for HR threats and HRR combos: keep display caps but feed
+# the solver the full sorted pool so it can mine deeper safety legs.
+RAW_HR_THREATS_CACHE = {"ts": 0, "data": []}
+RAW_HRR_COMBO_CACHE = {"ts": 0, "data": []}
 PLAYS_CACHE_TTL_SECONDS = int(os.getenv("PLAYS_CACHE_TTL", "600"))  # 10 min default
 PLAYS_GAME_CONCURRENCY = int(os.getenv("PLAYS_GAME_CONCURRENCY", "2"))
 PLAYS_LIMIT = int(os.getenv("PLAYS_LIMIT", "20"))
@@ -966,10 +970,17 @@ def _refresh_plays_blocking():
                     if len(hr_diversified) >= HR_THREATS_LIMIT:
                         break
                 HR_THREATS_CACHE["data"] = hr_diversified[:HR_THREATS_LIMIT]
+                # Raw, uncapped HR threats for the solver pool (display
+                # still uses the diversified, limited list above).
+                RAW_HR_THREATS_CACHE["ts"] = time.time()
+                RAW_HR_THREATS_CACHE["data"] = list(sorted_hr)
                 NRFI_CACHE["ts"] = time.time()
                 NRFI_CACHE["data"] = sorted_nrfi
                 HRR_COMBO_CACHE["ts"] = time.time()
                 HRR_COMBO_CACHE["data"] = hrr_diversified
+                # Raw, uncapped HRR combos for the solver pool.
+                RAW_HRR_COMBO_CACHE["ts"] = time.time()
+                RAW_HRR_COMBO_CACHE["data"] = list(sorted_hrr)
                 # Locks = top plays before per-game diversification, deduped
                 # by (player, stat) so doubleheaders don't repeat in the hero.
                 seen_locks = set()
@@ -1547,7 +1558,7 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
                 "game_pk": p.get("game_pk"),
                 "source": "play",
             })
-        for h in HR_THREATS_CACHE["data"]:
+        for h in (RAW_HR_THREATS_CACHE["data"] or HR_THREATS_CACHE["data"]):
             prob = h.get("probability")
             if not prob or prob <= 0:
                 continue
@@ -1562,7 +1573,7 @@ def _gather_pool(live_only: bool = False) -> list[dict]:
                 "game_pk": h.get("game_pk"),
                 "source": "hr",
             })
-        for c in HRR_COMBO_CACHE["data"]:
+        for c in (RAW_HRR_COMBO_CACHE["data"] or HRR_COMBO_CACHE["data"]):
             prob = c.get("probability")
             if not prob or prob <= 0:
                 continue

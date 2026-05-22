@@ -245,7 +245,18 @@ def get_team_active_hitters(team_id):
         return []
 
 
-def _get_batter_statcast(player_name, days_back=90):
+def _get_batter_statcast(player_name, days_back=None):
+    # Anchor to MLB season start (Mar 27 by convention) so "season" covers
+    # the FULL year-to-date instead of a rolling 90 days. Late-summer
+    # otherwise drops April games out of the baseline window.
+    if days_back is None:
+        from datetime import date
+        today = date.today()
+        season_start = date(today.year, 3, 27)
+        if today < season_start:
+            days_back = 90
+        else:
+            days_back = max(90, (today - season_start).days + 7)
     player_id, error = _lookup_player_id(player_name)
     if error:
         return None, error
