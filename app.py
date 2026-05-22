@@ -28,7 +28,7 @@ from src.predict import (
 from src.steals_data import get_sb_per_game, get_sb_success_rate, get_league_sb_per_g
 from src import ai_review
 
-PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "16"))
+PROJECTED_ROSTER_SCAN_LIMIT = int(os.getenv("ROSTER_SCAN_LIMIT", "40"))
 PROFILE_FETCH_WORKERS = int(os.getenv("PROFILE_FETCH_WORKERS", "2"))
 HITTERS_PER_TEAM = int(os.getenv("HITTERS_PER_TEAM", "9"))
 

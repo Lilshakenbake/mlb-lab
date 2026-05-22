@@ -318,11 +318,11 @@ def get_last5_hitter_profile(player_name):
 
         # ── Pull season + L15 windows from the same DF (90d pull) ─────────
         # We compute every per-game series across the FULL season window,
-        # then build the projection as a blend of L15 (recent form) and the
-        # full window (true-talent baseline). 60/40 L15/season is the
-        # Tango / THE BOOK in-season weighting — small enough sample on
-        # recent form to catch hot/cold, big enough baseline to ignore
-        # week-long noise (flu, BABIP variance, etc).
+        # then build the projection as a SEASON-WEIGHTED blend with L15 as
+        # a smaller hot/cold tilt. 35% L15 / 65% season — a star with a
+        # 74-TB season pedigree should NOT get dragged below the line by
+        # a 2-week cold spell, and a journeyman shouldn't get inflated by
+        # 15 lucky games. True-talent dominates; recency only nudges.
         hits_full = grouped["events"].apply(
             lambda x: x.isin(["single", "double", "triple", "home_run"]).sum()
         )
@@ -350,7 +350,7 @@ def get_last5_hitter_profile(player_name):
 
         # L15 = last 15 games; "season" = everything in the 90d window
         # (typically 45-70 games depending on rest days / IL stints).
-        def _season_l15_blend(full_series, l15_weight=0.60):
+        def _season_l15_blend(full_series, l15_weight=0.35):
             """Blend last-15 form with full-window baseline.
 
             Falls back gracefully when sample is thin: if we have <15
