@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -33,8 +34,8 @@ from pybaseball import playerid_lookup, statcast_batter, statcast_pitcher
 
 from src.mlb_data import STADIUMS
 
-MODELS_DIR = Path(__file__).resolve().parent / "models"
-MODELS_DIR.mkdir(exist_ok=True)
+MODELS_DIR = Path(os.getenv("MODELS_DIR") or Path(__file__).resolve().parent / "models")
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_HITTERS = [
     # AL East

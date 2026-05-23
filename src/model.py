@@ -18,7 +18,8 @@ except Exception:  # pragma: no cover
     joblib = None
     np = None
 
-MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+import os
+MODELS_DIR = Path(os.getenv("MODELS_DIR") or Path(__file__).resolve().parent.parent / "models")
 
 _BUNDLES: dict = {}
 
