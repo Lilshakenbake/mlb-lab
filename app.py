@@ -1427,6 +1427,68 @@ def hr_lotto_page():
     return render_template("hr_lotto.html")
 
 
+@app.route("/bases", methods=["GET"])
+@login_required
+def bases_page():
+    return render_template("bases.html")
+
+
+@app.route("/api/bases-board", methods=["GET"])
+@login_required
+def api_bases_board():
+    """Best Total Bases OVER pick per game on the slate, sorted by
+    calibrated probability descending. Uses RAW_PLAYS_CACHE (uncapped
+    pool) so we can scan every game even if the display-cap diversifier
+    dropped some. One leg per game (highest-prob TB player wins the
+    slot). PASS picks excluded; OVER-only (UNDER TB defeats high-floor).
+    """
+    with _PLAYS_LOCK:
+        pool = list(RAW_PLAYS_CACHE["data"] or PLAYS_CACHE["data"])
+        ts = PLAYS_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+
+    by_game: dict = {}
+    for p in pool:
+        if p.get("stat_label") != "Total Bases":
+            continue
+        if p.get("pick") != "OVER":
+            continue
+        gpk = p.get("game_pk")
+        if gpk is None:
+            continue
+        cp = _calibrated_probability(p)
+        if cp <= 0:
+            continue
+        cur = by_game.get(gpk)
+        if cur is None or cp > cur[0]:
+            by_game[gpk] = (cp, p)
+
+    rows = []
+    for cp, p in sorted(by_game.values(), key=lambda t: -t[0]):
+        rows.append({
+            "player": p.get("headline"),
+            "stat": p.get("stat_label"),
+            "pick": p.get("pick"),
+            "line": p.get("line"),
+            "projection": p.get("projection"),
+            "probability": round(float(cp), 2),
+            "raw_probability": p.get("probability"),
+            "matchup": p.get("matchup"),
+            "game_pk": p.get("game_pk"),
+            "market_edge_pct": p.get("market_edge_pct"),
+            "model_used": p.get("model_used", False),
+        })
+
+    return jsonify({
+        "ok": True,
+        "ts": ts,
+        "computing": bool(computing),
+        "pool_size": len(pool),
+        "games_with_picks": len(rows),
+        "rows": rows,
+    })
+
+
 # ── Challenges: bankroll-to-target parlay solver ────────────────────────────
 def _load_today_schedule_status() -> dict:
     """Return {game_pk: {"game_time": iso, "status": str}} for today's slate.

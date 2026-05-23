@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bases Board · MLB Lab</title>
+<style>
+    body { background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:0; }
+    .container { max-width:780px; margin:0 auto; padding:18px 14px 80px; }
+    h1 { font-size:22px; margin:6px 0 2px; text-align:center; }
+    .sub { color:#94a3b8; font-size:13px; margin:0 0 14px; text-align:center; }
+    .topnav { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:13px; }
+    .topnav a { color:#93c5fd; text-decoration:none; font-weight:600; }
+    .legend {
+        background:#1e293b; border:1px solid #334155; border-radius:10px;
+        padding:10px 12px; margin-bottom:14px; font-size:12px; color:#cbd5e1; line-height:1.5;
+    }
+    .legend b { color:#fde68a; }
+    .refresh { font-size:11px; color:#64748b; text-align:right; margin:4px 0 8px; }
+    .row {
+        background:#1e293b; border:1px solid #334155; border-radius:10px;
+        padding:10px 12px; margin-bottom:8px;
+        display:flex; align-items:center; gap:10px;
+    }
+    .rank {
+        font-size:13px; font-weight:800; color:#64748b; min-width:22px; text-align:right;
+    }
+    .body { flex:1; min-width:0; }
+    .player { font-size:14px; font-weight:700; color:#e2e8f0; }
+    .player .pick { color:#fbbf24; font-weight:600; margin-left:4px; }
+    .meta { color:#94a3b8; font-size:11px; margin-top:2px; }
+    .prob {
+        font-size:17px; font-weight:800; color:#34d399;
+        font-variant-numeric:tabular-nums; min-width:54px; text-align:right;
+    }
+    .empty {
+        text-align:center; color:#94a3b8; padding:30px 12px;
+        background:#1e293b; border-radius:12px; border:1px dashed #334155;
+    }
+    .filter {
+        display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap;
+    }
+    .filter button {
+        background:#1e293b; color:#cbd5e1; border:1px solid #334155;
+        padding:5px 10px; border-radius:999px; font-size:12px; cursor:pointer;
+    }
+    .filter button.active { background:#1e3a8a; color:#bfdbfe; border-color:#3b82f6; }
+</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/sleek.css') }}">
+</head>
+<body>
+<div class="container">
+    <div class="topnav">
+        <a href="/">← Slate</a>
+        <a href="/hr-lotto">🎰 HR Lotto</a>
+        <a href="/watchlist">Watchlist</a>
+    </div>
+
+    <h1>💎 Bases Board</h1>
+    <p class="sub">Best Total Bases pick from every game on tonight's slate</p>
+
+    <div class="legend">
+        <b>How it works:</b> One leg per game — the highest calibrated-probability
+        Total Bases OVER on the slate, sorted top to bottom. Use this to scan
+        the safest TB plays at a glance and cherry-pick into your own parlay.
+    </div>
+
+    <div class="filter">
+        <button class="active" data-min="0">All</button>
+        <button data-min="60">≥ 60%</button>
+        <button data-min="65">≥ 65%</button>
+        <button data-min="70">≥ 70%</button>
+        <button data-min="75">≥ 75%</button>
+    </div>
+
+    <div class="refresh" id="refresh-status"></div>
+    <div id="rows"></div>
+</div>
+
+<script>
+const escape = (s) => String(s ?? "").replace(/[<>&"']/g, c => ({
+    "<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;","'":"&#39;"
+}[c]));
+
+let ALL_ROWS = [];
+let MIN_PROB = 0;
+
+function render() {
+    const el = document.getElementById("rows");
+    const filtered = ALL_ROWS.filter(r => (r.probability || 0) >= MIN_PROB);
+    if (!filtered.length) {
+        el.innerHTML = `<div class="empty">No Total Bases picks at this threshold.</div>`;
+        return;
+    }
+    el.innerHTML = filtered.map((r, i) => `
+        <div class="row">
+            <div class="rank">${i + 1}</div>
+            <div class="body">
+                <div class="player">${escape(r.player)}<span class="pick"> ${escape(r.pick)} ${escape(r.line)}</span></div>
+                <div class="meta">${escape(r.matchup || "")} · proj ${(r.projection ?? 0).toFixed?.(2) ?? r.projection}</div>
+            </div>
+            <div class="prob">${(r.probability || 0).toFixed(1)}%</div>
+        </div>
+    `).join("");
+}
+
+async function load() {
+    const status = document.getElementById("refresh-status");
+    try {
+        const res = await fetch("/api/bases-board");
+        const data = await res.json();
+        ALL_ROWS = data.rows || [];
+        render();
+        if (data.computing) {
+            status.textContent = `⏳ Slate still computing… (${data.games_with_picks} games so far)`;
+            setTimeout(load, 15000);
+        } else if (data.ts) {
+            const age = Math.round((Date.now()/1000 - data.ts) / 60);
+            status.textContent = `${data.games_with_picks} games · updated ${age}m ago`;
+        }
+    } catch (e) {
+        status.textContent = `Error loading: ${e}`;
+    }
+}
+
+document.querySelectorAll(".filter button").forEach(b => {
+    b.addEventListener("click", () => {
+        document.querySelectorAll(".filter button").forEach(x => x.classList.remove("active"));
+        b.classList.add("active");
+        MIN_PROB = parseFloat(b.dataset.min);
+        render();
+    });
+});
+
+load();
+</script>
+</body>
+</html>
