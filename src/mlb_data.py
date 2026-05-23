@@ -361,7 +361,7 @@ def get_last5_hitter_profile(player_name):
 
         # L15 = last 15 games; "season" = everything in the 90d window
         # (typically 45-70 games depending on rest days / IL stints).
-        def _season_l15_blend(full_series, l15_weight=0.35):
+        def _season_l15_blend(full_series, l15_weight=0.65):
             """Blend last-15 form with full-window baseline.
 
             Falls back gracefully when sample is thin: if we have <15
