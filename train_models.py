@@ -37,18 +37,73 @@ MODELS_DIR = Path(__file__).resolve().parent / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
 DEFAULT_HITTERS = [
-    "Aaron Judge", "Mookie Betts", "Juan Soto", "Freddie Freeman",
-    "Bobby Witt Jr.", "Shohei Ohtani", "Jose Ramirez", "Vladimir Guerrero Jr.",
-    "Kyle Tucker", "Yordan Alvarez", "Corey Seager", "Bryce Harper",
-    "Manny Machado", "Trea Turner", "Marcus Semien", "Rafael Devers",
-    "Pete Alonso", "Matt Olson", "Francisco Lindor", "Gunnar Henderson",
+    # AL East
+    "Aaron Judge", "Juan Soto", "Anthony Volpe", "Giancarlo Stanton",
+    "Rafael Devers", "Triston Casas", "Jarren Duran", "Wilyer Abreu",
+    "Gunnar Henderson", "Adley Rutschman", "Jackson Holliday", "Ryan Mountcastle",
+    "Vladimir Guerrero Jr.", "Bo Bichette", "George Springer", "Daulton Varsho",
+    "Yandy Díaz", "Brandon Lowe", "Junior Caminero", "Josh Lowe",
+    # AL Central
+    "Jose Ramirez", "Steven Kwan", "Josh Naylor", "Andrés Giménez",
+    "Royce Lewis", "Byron Buxton", "Carlos Correa", "Willi Castro",
+    "Riley Greene", "Spencer Torkelson", "Kerry Carpenter", "Colt Keith",
+    "Bobby Witt Jr.", "Vinnie Pasquantino", "Salvador Perez", "MJ Melendez",
+    "Luis Robert Jr.", "Andrew Vaughn",
+    # AL West
+    "Yordan Alvarez", "Jose Altuve", "Kyle Tucker", "Alex Bregman",
+    "Jeremy Peña", "Yainer Diaz", "Mike Trout", "Anthony Rendon",
+    "Logan O'Hoppe", "Julio Rodríguez", "Cal Raleigh", "Randy Arozarena",
+    "Corey Seager", "Marcus Semien", "Adolis García", "Wyatt Langford",
+    "Brent Rooker", "Lawrence Butler", "JJ Bleday",
+    # NL East
+    "Bryce Harper", "Trea Turner", "Kyle Schwarber", "Nick Castellanos",
+    "Alec Bohm", "J.T. Realmuto", "Ronald Acuña Jr.", "Matt Olson",
+    "Marcell Ozuna", "Ozzie Albies", "Austin Riley", "Sean Murphy",
+    "Francisco Lindor", "Pete Alonso", "Mark Vientos", "Brandon Nimmo",
+    "Jazz Chisholm Jr.", "Luis Arraez", "CJ Abrams",
+    # NL Central
+    "William Contreras", "Christian Yelich", "Willy Adames", "Jackson Chourio",
+    "Elly De La Cruz", "Spencer Steer", "TJ Friedl", "Tyler Stephenson",
+    "Paul Goldschmidt", "Nolan Arenado", "Iván Herrera", "Brendan Donovan",
+    "Ian Happ", "Seiya Suzuki", "Pete Crow-Armstrong", "Cody Bellinger",
+    "Oneil Cruz", "Bryan Reynolds", "Andrew McCutchen",
+    # NL West
+    "Shohei Ohtani", "Mookie Betts", "Freddie Freeman", "Will Smith",
+    "Teoscar Hernández", "Max Muncy", "Manny Machado", "Fernando Tatis Jr.",
+    "Xander Bogaerts", "Jackson Merrill", "Jurickson Profar", "Ketel Marte",
+    "Corbin Carroll", "Eugenio Suárez", "Gabriel Moreno", "Heliot Ramos",
+    "Matt Chapman", "Tyler Fitzgerald", "Brenton Doyle", "Ezequiel Tovar",
+    "Hunter Goodman",
 ]
 
 DEFAULT_PITCHERS = [
-    "Gerrit Cole", "Zack Wheeler", "Spencer Strider", "Corbin Burnes",
-    "Tarik Skubal", "Kevin Gausman", "Logan Webb", "Pablo Lopez",
-    "Yoshinobu Yamamoto", "Cole Ragans", "Aaron Nola", "Zac Gallen",
-    "Sonny Gray", "George Kirby", "Logan Gilbert",
+    # AL
+    "Gerrit Cole", "Carlos Rodón", "Max Fried", "Marcus Stroman",
+    "Garrett Crochet", "Brayan Bello", "Tanner Houck", "Kutter Crawford",
+    "Corbin Burnes", "Zach Eflin", "Grayson Rodriguez", "Dean Kremer",
+    "Jose Berrios", "Kevin Gausman", "Chris Bassitt", "Bowden Francis",
+    "Shane McClanahan", "Drew Rasmussen", "Ryan Pepiot", "Taj Bradley",
+    "Tarik Skubal", "Jack Flaherty", "Casey Mize", "Reese Olson",
+    "Cole Ragans", "Seth Lugo", "Brady Singer", "Michael Wacha",
+    "Pablo López", "Joe Ryan", "Bailey Ober", "Simeon Woods Richardson",
+    "Davis Martin", "Jonathan Cannon",
+    "Framber Valdez", "Hunter Brown", "Spencer Arrighetti", "Ronel Blanco",
+    "Logan Gilbert", "Luis Castillo", "George Kirby", "Bryce Miller", "Bryan Woo",
+    "Jacob deGrom", "Nathan Eovaldi", "Jon Gray",
+    # NL
+    "Zack Wheeler", "Aaron Nola", "Cristopher Sánchez", "Ranger Suárez",
+    "Spencer Strider", "Chris Sale", "Reynaldo López",
+    "Sandy Alcantara", "Jesús Luzardo", "Edward Cabrera", "Braxton Garrett",
+    "Kodai Senga", "Sean Manaea", "Luis Severino", "David Peterson",
+    "MacKenzie Gore", "Jake Irvin", "Mitchell Parker", "DJ Herz",
+    "Hunter Greene", "Nick Lodolo", "Andrew Abbott", "Frankie Montas",
+    "Sonny Gray", "Erick Fedde", "Lance Lynn", "Miles Mikolas",
+    "Shota Imanaga", "Justin Steele", "Jameson Taillon", "Javier Assad",
+    "Paul Skenes", "Mitch Keller", "Jared Jones", "Bailey Falter",
+    "Yoshinobu Yamamoto", "Tyler Glasnow", "Walker Buehler", "Tony Gonsolin",
+    "Yu Darvish", "Dylan Cease", "Joe Musgrove", "Michael King",
+    "Logan Webb", "Robbie Ray", "Blake Snell", "Jordan Hicks",
+    "Zac Gallen", "Merrill Kelly", "Eduardo Rodriguez", "Brandon Pfaadt",
 ]
 
 INDOOR_PARKS = {team for team, info in STADIUMS.items() if info["indoor"]}
