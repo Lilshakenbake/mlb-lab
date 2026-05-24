@@ -1433,6 +1433,144 @@ def bases_page():
     return render_template("bases.html")
 
 
+@app.route("/hits-combos", methods=["GET"])
+@login_required
+def hits_combos_page():
+    return render_template("hits_combos.html")
+
+
+def _build_hits_combos(pool_picks: list[dict], n_legs: int, n_combos: int,
+                       top_pool: int = 14, max_overlap: int = None):
+    """Generate variety-filtered Hits parlay combos.
+
+    Pulls from the top `top_pool` Hits OVER picks (one per game already,
+    upstream filter). Enumerates all combos of size n_legs, sorts by
+    combined model probability, then applies a variety filter: each
+    successive combo must differ from already-selected ones by more than
+    `max_overlap` shared legs. Keeps the user from seeing 5 versions of
+    the same 4 players with one swap.
+
+    `max_overlap` default = n_legs - 2  (must differ by 2+ legs).
+    """
+    from itertools import combinations
+    from math import prod
+
+    if max_overlap is None:
+        # Tighter variety: 3-leg can share 1, 4-leg can share 1, 5-leg can share 2.
+        # Keeps each combo visibly distinct instead of "same 3 + one swap".
+        max_overlap = 1 if n_legs <= 4 else 2
+
+    pool = sorted(
+        [p for p in pool_picks if p.get("probability")],
+        key=lambda x: x["probability"],
+        reverse=True,
+    )[:top_pool]
+
+    if len(pool) < n_legs:
+        return []
+
+    scored = []
+    for combo in combinations(pool, n_legs):
+        gpks = [c.get("game_pk") for c in combo]
+        # One leg per game — Hits combo should diversify games.
+        if len([g for g in gpks if g is not None]) != len(set(g for g in gpks if g is not None)):
+            continue
+        prob = prod((c["probability"] or 0) / 100.0 for c in combo)
+        if prob <= 0:
+            continue
+        # Hits OVER 0.5 is typically -260 to -180 (juicy chalk).
+        # Use fair odds derived from our model probability per leg.
+        dec = prod(1.0 / ((c["probability"] or 1) / 100.0) for c in combo)
+        scored.append({
+            "combo": combo,
+            "prob": prob,
+            "dec": dec,
+        })
+
+    scored.sort(key=lambda x: -x["prob"])
+
+    # Variety filter: pick top combo, then skip any combo sharing more
+    # than max_overlap legs with an already-picked one.
+    picked: list = []
+    picked_sigs: list[set] = []
+    for s in scored:
+        sig = {(c.get("headline"), c.get("game_pk")) for c in s["combo"]}
+        if any(len(sig & ps) > max_overlap for ps in picked_sigs):
+            continue
+        picked.append(s)
+        picked_sigs.append(sig)
+        if len(picked) >= n_combos:
+            break
+
+    out = []
+    for s in picked:
+        combo = s["combo"]
+        out.append({
+            "legs": [{
+                "player": c.get("headline"),
+                "pick": c.get("pick"),
+                "line": c.get("line"),
+                "probability": c.get("probability"),
+                "matchup": c.get("matchup"),
+                "game_pk": c.get("game_pk"),
+            } for c in combo],
+            "n_legs": n_legs,
+            "combined_prob": round(s["prob"] * 100, 2),
+            "fair_american": _decimal_to_american(s["dec"]),
+            "fair_decimal": round(s["dec"], 2),
+        })
+    return out
+
+
+@app.route("/api/hits-combos", methods=["GET"])
+@login_required
+def api_hits_combos():
+    """Variety pack of Hits OVER parlays — 3, 4, and 5-leg combos.
+
+    Pulls best Hits pick per game from RAW_PLAYS_CACHE (one leg per
+    game), then generates multiple distinct combinations at each leg
+    count so you can cherry-pick. Variety filter prevents the standard
+    "top 5 are just one player swap apart" problem.
+    """
+    with _PLAYS_LOCK:
+        pool = list(RAW_PLAYS_CACHE["data"] or PLAYS_CACHE["data"])
+        ts = PLAYS_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+
+    # Best Hits OVER per game (highest calibrated probability wins slot).
+    by_game: dict = {}
+    for p in pool:
+        if p.get("stat_label") != "Hits":
+            continue
+        if p.get("pick") != "OVER":
+            continue
+        gpk = p.get("game_pk")
+        if gpk is None:
+            continue
+        cp = _calibrated_probability(p)
+        if cp <= 0:
+            continue
+        # Mutate a copy with calibrated prob so combo math uses it.
+        q = dict(p)
+        q["probability"] = round(float(cp), 2)
+        cur = by_game.get(gpk)
+        if cur is None or q["probability"] > cur["probability"]:
+            by_game[gpk] = q
+
+    per_game = list(by_game.values())
+
+    return jsonify({
+        "ok": True,
+        "ts": ts,
+        "computing": bool(computing),
+        "pool_size": len(pool),
+        "games_with_picks": len(per_game),
+        "three_leg": _build_hits_combos(per_game, 3, 5),
+        "four_leg":  _build_hits_combos(per_game, 4, 5),
+        "five_leg":  _build_hits_combos(per_game, 5, 5),
+    })
+
+
 @app.route("/api/bases-board", methods=["GET"])
 @login_required
 def api_bases_board():

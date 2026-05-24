@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hits Combos · MLB Lab</title>
+<style>
+    body { background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:0; }
+    .container { max-width:780px; margin:0 auto; padding:18px 14px 80px; }
+    h1 { font-size:22px; margin:6px 0 2px; text-align:center; }
+    h2 { font-size:17px; margin:18px 0 6px; }
+    .sub { color:#94a3b8; font-size:13px; margin:0 0 14px; text-align:center; }
+    .topnav { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:13px; }
+    .topnav a { color:#93c5fd; text-decoration:none; font-weight:600; }
+    .section-sub { color:#94a3b8; font-size:12px; margin:-2px 0 8px; }
+    .combo-card {
+        background:#1e293b; border:1px solid #334155; border-radius:12px;
+        padding:11px 12px; margin-bottom:9px;
+    }
+    .combo-header {
+        display:flex; justify-content:space-between; align-items:flex-start;
+        gap:10px; margin-bottom:7px; flex-wrap:wrap;
+    }
+    .combo-title { font-size:13px; font-weight:700; color:#cbd5e1; }
+    .combo-payout {
+        font-size:17px; font-weight:800; color:#fbbf24;
+        font-variant-numeric:tabular-nums;
+    }
+    .combo-prob {
+        display:inline-block; padding:3px 8px; border-radius:999px;
+        background:#065f46; color:#a7f3d0; font-size:11px; font-weight:700;
+        margin-right:6px;
+    }
+    .leg {
+        background:#0f172a; border-left:3px solid #34d399;
+        padding:6px 9px; margin:4px 0; border-radius:4px; font-size:13px;
+    }
+    .leg .player { font-weight:700; color:#e2e8f0; }
+    .leg .pick { color:#fbbf24; font-weight:600; margin-left:4px; }
+    .leg .prob {
+        float:right; color:#34d399; font-weight:700;
+        font-variant-numeric:tabular-nums;
+    }
+    .leg .meta { color:#94a3b8; font-size:11px; margin-top:2px; }
+    .empty {
+        text-align:center; color:#94a3b8; padding:30px 12px;
+        background:#1e293b; border-radius:12px; border:1px dashed #334155;
+    }
+    .legend {
+        background:#1e293b; border:1px solid #334155; border-radius:10px;
+        padding:10px 12px; margin-bottom:14px; font-size:12px; color:#cbd5e1; line-height:1.5;
+    }
+    .legend b { color:#fde68a; }
+    .refresh { font-size:11px; color:#64748b; text-align:right; margin:4px 0 8px; }
+</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/sleek.css') }}">
+</head>
+<body>
+<div class="container">
+    <div class="topnav">
+        <a href="/">← Slate</a>
+        <a href="/bases">💎 Bases</a>
+        <a href="/hr-lotto">🎰 HR Lotto</a>
+        <a href="/watchlist">Watchlist</a>
+    </div>
+
+    <h1>🎯 Hits Combos</h1>
+    <p class="sub">Variety pack of Hits OVER parlays — pick your style</p>
+
+    <div class="legend">
+        <b>How it works:</b> Each combo uses one leg per game from the best
+        Hits OVER pick on that slate. Variety filter ensures the 5 combos
+        in each section actually look different — no "swap one player" clones.
+        Combined % is the model's true probability assuming leg independence.
+    </div>
+
+    <div class="refresh" id="refresh-status"></div>
+
+    <h2>3-Leg Hits Combos</h2>
+    <div class="section-sub">Safer floor — 5 distinct combos sorted by hit rate</div>
+    <div id="three-leg"></div>
+
+    <h2>4-Leg Hits Combos</h2>
+    <div class="section-sub">Balanced — payout & probability sweet spot</div>
+    <div id="four-leg"></div>
+
+    <h2>5-Leg Hits Combos</h2>
+    <div class="section-sub">Higher variance — bigger payout, longer odds</div>
+    <div id="five-leg"></div>
+</div>
+
+<script>
+const fmtAmer = (n) => n > 0 ? `+${n}` : `${n}`;
+const escape = (s) => String(s ?? "").replace(/[<>&"']/g, c => ({
+    "<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;","'":"&#39;"
+}[c]));
+
+const renderLeg = (leg) => `
+    <div class="leg">
+        <span class="prob">${(leg.probability || 0).toFixed(1)}%</span>
+        <div class="player">${escape(leg.player)}<span class="pick"> ${escape(leg.pick)} ${escape(leg.line)}</span></div>
+        <div class="meta">${escape(leg.matchup || "")}</div>
+    </div>`;
+
+const renderCombo = (c, i) => `
+    <div class="combo-card">
+        <div class="combo-header">
+            <div>
+                <span class="combo-prob">${c.combined_prob.toFixed(2)}% true</span>
+                <span class="combo-title">Combo #${i + 1} · ${c.n_legs} legs</span>
+            </div>
+            <div class="combo-payout">${fmtAmer(c.fair_american)}</div>
+        </div>
+        ${c.legs.map(renderLeg).join("")}
+    </div>`;
+
+async function load() {
+    const status = document.getElementById("refresh-status");
+    try {
+        const res = await fetch("/api/hits-combos");
+        const data = await res.json();
+
+        const renderSection = (id, combos) => {
+            const el = document.getElementById(id);
+            if (!combos || !combos.length) {
+                el.innerHTML = `<div class="empty">${data.computing ? "⏳ Computing tonight's slate…" : "Not enough qualifying picks for this leg count."}</div>`;
+                return;
+            }
+            el.innerHTML = combos.map((c, i) => renderCombo(c, i)).join("");
+        };
+
+        renderSection("three-leg", data.three_leg);
+        renderSection("four-leg", data.four_leg);
+        renderSection("five-leg", data.five_leg);
+
+        if (data.computing) {
+            status.textContent = `⏳ Slate still computing… (${data.games_with_picks} games so far)`;
+            setTimeout(load, 15000);
+        } else if (data.ts) {
+            const age = Math.round((Date.now()/1000 - data.ts) / 60);
+            status.textContent = `${data.games_with_picks} games · updated ${age}m ago`;
+        }
+    } catch (e) {
+        status.textContent = `Error loading: ${e}`;
+    }
+}
+
+load();
+</script>
+</body>
+</html>
