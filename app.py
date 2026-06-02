@@ -1843,16 +1843,24 @@ def _calibrated_probability(pick: dict) -> float:
     of over-promising.
 
     Conservative per-source factors (tweak as more graded data accrues):
-      - hitter props in 65-80% band: × 0.92  (the overconfident zone)
+      - hitter props in 65-80% band: × 0.97  (light safety haircut)
       - hitter props outside band: unchanged (calibration was fine)
       - HRR / HR threats: × 0.95 (small sample, lean a bit conservative)
       - pitcher Ks / ML / RL: unchanged for now
+
+    NOTE: the old ×0.92 haircut existed because hitter props ran ~7pp
+    overconfident — but that was a symptom of the normal-CDF probability
+    model treating low integer counts as continuous. Hitter props now use a
+    Poisson / negative-binomial tail (src.model.count_prob_over), which fixes
+    the overconfidence at the source. The remaining ×0.97 is just a small
+    safety margin for sample noise + TB over-dispersion, so parlay legs don't
+    compound any residual optimism.
     """
     raw = float(pick.get("probability") or 0)
     stat = pick.get("stat") or ""
     src = pick.get("source") or ""
     if stat in {"Hits", "Total Bases", "Home Runs", "RBIs"} and 65 <= raw <= 80:
-        return raw * 0.92
+        return raw * 0.97
     if src in {"hr", "hrr"} or stat in {"Home Run", "1+ H/R/RBI"}:
         return raw * 0.95
     return raw

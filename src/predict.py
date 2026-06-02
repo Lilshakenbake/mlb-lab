@@ -302,20 +302,38 @@ def _xstat_blend(stat_type, base_projection, hitter_profile):
         x = hitter_profile.get("xtb_avg")
         bbl = hitter_profile.get("barrel_rate")
         bbe = hitter_profile.get("bbe_per_game")
-        iso = hitter_profile.get("iso_power")  # avg extra bases per hit
+        iso = hitter_profile.get("iso_power")  # extra bases per hit (NOT trad ISO)
+        # Corrupted-xTB guard: a luck-adjusted TB can't plausibly run 1.8x+
+        # above the player's own recent TB. A stale/buggy profile (e.g. an
+        # xtb_avg built from pitches-per-game instead of PA-per-game) used to
+        # read ~13 TB/game and exploded the projection; reject it and fall
+        # back to the power-only blend so the pick stays sane until the
+        # profile refetches with corrected math.
+        if x is not None and float(x) > base_projection * 1.8:
+            x = None
         # A barrel produces ~1.5 bases on average (25% HR=4, ~50% double=2, rest=0).
         x_power = float(bbl) * float(bbe) * 1.5 if (bbl is not None and bbe is not None) else None
-        # ISO bumps the projection multiplicatively: 0.4+ ISO is elite slugger.
-        iso_mult = 1.0 + 0.35 * float(iso) if iso is not None else 1.0
+        # iso_power here = extra bases per hit (singles ~0.4, elite sluggers
+        # ~1.3), NOT traditional ISO (SLG-AVG, ~0.2-0.4). Center on the ~0.55
+        # league norm and apply a gentle, capped multiplicative tilt so a
+        # slugger gets a modest TB bump without the projection ballooning.
+        iso_mult = 1.0
+        if iso is not None:
+            iso_mult = 1.0 + max(min((float(iso) - 0.55) * 0.18, 0.14), -0.08)
 
         if x is not None and x_power is not None:
-            blended = 0.45 * base_projection + 0.30 * float(x) + 0.25 * x_power
-            return blended * iso_mult
-        if x is not None:
-            return (0.6 * base_projection + 0.4 * float(x)) * iso_mult
-        if x_power is not None:
-            return (0.7 * base_projection + 0.3 * x_power) * iso_mult
-        return base_projection * iso_mult
+            result = (0.45 * base_projection + 0.30 * float(x) + 0.25 * x_power) * iso_mult
+        elif x is not None:
+            result = (0.6 * base_projection + 0.4 * float(x)) * iso_mult
+        elif x_power is not None:
+            result = (0.7 * base_projection + 0.3 * x_power) * iso_mult
+        else:
+            result = base_projection * iso_mult
+        # Final sanity band: xStats refine the projection, they don't replace
+        # the player's established TB rate. Keep the blended result within a
+        # reasonable multiple of the base so no single bad input dominates.
+        lo, hi = base_projection * 0.65, base_projection * 1.6
+        return max(min(result, hi), lo)
 
     elif stat_type == "home_runs":
         # Barrel rate is the single best HR predictor — about 25% of barrels
@@ -928,7 +946,18 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     else:
         pick = "OVER" if edge > 0 else "UNDER"
 
-    if model_used and model_std:
+    if stat_type in ("hits", "total_bases", "home_runs", "rbis"):
+        # Count-stat lines (Hits/HR/RBI at 0.5, TB at 1.5) are P(count >= k)
+        # events. A Poisson / negative-binomial tail on the projected mean is
+        # far better calibrated near a .5 line than the old normal-CDF
+        # (over_probability) or edge-bucket table, both of which treated a
+        # low integer count as continuous and ran ~7pp overconfident. The
+        # projection already carries every context factor (park, platoon,
+        # weather, bullpen, xStats, ML blend), so it's the right mean to use.
+        p_over = _ml.count_prob_over(projection, line, stat_type)
+        p_side = p_over if pick != "UNDER" else (1.0 - p_over)
+        probability = round(p_side * 100, 1)
+    elif model_used and model_std:
         probability = _ml.over_probability(projection, line, model_std)
     else:
         probability = edge_to_probability(stat_type, edge)

@@ -418,7 +418,14 @@ def get_last5_hitter_profile(player_name):
             bbe_per_game = _season_l15_blend(bbe_series)
         else:
             bbe_per_game = None
-        pa_series = df.groupby("game_date").size()
+        # Plate appearances per game = terminal events (one row per PA),
+        # NOT pitch rows. df is pitch-level (one row per pitch), so a plain
+        # .size() counted ~4x too many ("PAs" of ~17-19), which inflated
+        # xtb_avg ~4x (→ ~13 TB/game) and crushed contact_rate ~4x (→ ~0.11).
+        if "events" in df.columns:
+            pa_series = df[df["events"].notna()].groupby("game_date").size()
+        else:
+            pa_series = df.groupby("game_date").size()
         pa_per_game = _season_l15_blend(pa_series)
 
         xhits_avg = (
@@ -426,10 +433,16 @@ def get_last5_hitter_profile(player_name):
             if xba_per_bbe is not None and len(xba_per_bbe) and bbe_per_game else None
         )
         # xwOBA scales roughly to slugging; *1.7 rough TB-per-PA conversion.
+        # The mean is taken over batted balls only (xwOBA is null on K/BB),
+        # which slightly overstates per-PA value, and the *1.7 is a fudge —
+        # so clamp the result to a sane band of the player's actual TB rate
+        # rather than letting a rough estimate dominate the projection.
         xtb_avg = (
             float(xwoba_per_pa.mean()) * pa_per_game * 1.7
             if xwoba_per_pa is not None and len(xwoba_per_pa) else None
         )
+        if xtb_avg is not None and tb_blend > 0:
+            xtb_avg = min(xtb_avg, tb_blend * 1.8)
 
         # Barrel rate (Statcast quality bucket = 6) and hard-hit rate (≥95mph EV).
         barrel_rate = None

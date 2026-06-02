@@ -1,0 +1,2 @@
+- [Statcast xStat pipeline](statcast-xstat-pipeline.md) — statcast df is pitch-level; per-game rates must divide by PA (events.notna()), not row count, or xTB/contact_rate inflate ~4x.
+- [Count-stat probabilities](count-stat-probabilities.md) — hitter count props use Poisson/NB tails on the projection; a sane probability model surfaces (no longer masks) bad projections.
