@@ -490,7 +490,12 @@ def _build_plays_for_game(game):
         ("steals", boards.get("top_steals", [])),
     ):
         for prop in prop_list:
-            if prop.get("pick") == "PASS":
+            # Plays of the Day is an OVER-only hitter board: you're hunting
+            # production (a hit, a HR, total bases), not fading it. An UNDER
+            # on hits/TB/HR/RBI/steals isn't part of this board's philosophy,
+            # so skip PASS *and* UNDER — only OVER plays surface here (and in
+            # the parlay pool this feeds).
+            if prop.get("pick") != "OVER":
                 continue
             out.append({
                 "kind": "hitter",
