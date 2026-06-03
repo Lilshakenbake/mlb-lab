@@ -1042,6 +1042,17 @@ def build_pitcher_k_prop(pitcher_name, line, projection, weather, pitcher_profil
     }
 
 
+def _winprob_from_margin(margin: float) -> float:
+    """Projected run-margin (home minus away) -> P(home win) via a logistic curve.
+
+    Replaces the old hardcoded bucket table with a smooth function. k≈0.27
+    reproduces the prior anchors closely while interpolating between them:
+      margin 0.0 -> 50%, 0.6 -> 54%, 1.25 -> 58%, 2.0 -> 63%, 3.0 -> 69%, 4.0 -> 74%.
+    Negative margin yields <50% (home is the dog). Caller clamps the tails.
+    """
+    return 1.0 / (1.0 + math.exp(-0.27 * float(margin)))
+
+
 def build_spread_lean(game, home_team_score, away_team_score, home_pitcher_profile, away_pitcher_profile, weather):
     home_pitching_score = 0.0
     away_pitching_score = 0.0
@@ -1079,18 +1090,14 @@ def build_spread_lean(game, home_team_score, away_team_score, home_pitcher_profi
     margin = round(home_total - away_total, 2)
     abs_margin = abs(margin)
 
-    if abs_margin >= 4.0:
-        ml_probability = 72
-    elif abs_margin >= 3.0:
-        ml_probability = 68
-    elif abs_margin >= 2.0:
-        ml_probability = 63
-    elif abs_margin >= 1.25:
-        ml_probability = 58
-    elif abs_margin >= 0.6:
-        ml_probability = 54
-    else:
-        ml_probability = 51
+    # Win probability from a smooth logistic curve on the projected margin
+    # (no longer a hardcoded bucket table). Clamp the tails: the heuristic
+    # margin isn't precise enough to justify extreme confidence, and MLB
+    # moneylines rarely imply >80% even for big favorites. This is the
+    # MODEL-ONLY probability; attach_game_edges() later blends in the
+    # de-vigged market price (the stronger ML predictor) when odds exist.
+    model_home_win_prob = min(0.80, max(0.20, _winprob_from_margin(margin)))
+    ml_probability = round((model_home_win_prob if margin > 0 else 1 - model_home_win_prob) * 100)
 
     # Run-line direction logic — the OLD code always recommended the favorite
     # at -1.5 (cover by 2+), which is the harder side. Sharp run-line betting
@@ -1133,6 +1140,8 @@ def build_spread_lean(game, home_team_score, away_team_score, home_pitcher_profi
     return {
         "ml_pick": ml_pick,
         "ml_probability": ml_probability,
+        "model_ml_probability": ml_probability,
+        "model_home_win_prob": round(model_home_win_prob, 4),
         "run_line_pick": run_line_pick,
         "run_line_probability": run_line_probability,
         "margin": margin,

@@ -32,6 +32,11 @@ GAME_TTL = 2 * 3600       # 2 hours
 PROP_TTL = 12 * 3600      # 12 hours per game (controls quota burn)
 TIMEOUT = 10
 
+# Weight on the de-vigged market consensus when blending it with the heuristic
+# model win%. The market is the stronger ML predictor, so it carries the
+# majority; the model still nudges the number and can find disagreement edges.
+ML_MARKET_WEIGHT = 0.65
+
 # Track last quota usage from response headers so we can show it in UI.
 _USAGE = {"used": None, "remaining": None, "ts": None}
 
@@ -141,6 +146,40 @@ def best_moneyline(game_odds: dict, team_name: str) -> Optional[dict]:
                         "prob": _american_to_prob(price),
                     }
     return best
+
+
+def market_home_winprob(game_odds: dict, home_team: str, away_team: str) -> Optional[float]:
+    """Consensus de-vigged P(home win) from the h2h market across all books.
+
+    For each book that prices both sides, convert American odds -> implied
+    prob, strip the vig (two-way proportional devig), then average the home
+    probabilities across books for a stable consensus. The de-vigged market
+    line is the single best public predictor of an MLB moneyline, so this is
+    what we blend our heuristic model against. Returns None if no complete
+    two-way market is found.
+    """
+    if not game_odds:
+        return None
+    probs = []
+    for bm in game_odds.get("bookmakers", []):
+        home_am = away_am = None
+        for mk in bm.get("markets", []):
+            if mk.get("key") != "h2h":
+                continue
+            for o in mk.get("outcomes", []):
+                price = o.get("price")
+                if price is None:
+                    continue
+                if _team_match(o.get("name", ""), home_team):
+                    home_am = price
+                elif _team_match(o.get("name", ""), away_team):
+                    away_am = price
+        if home_am is not None and away_am is not None:
+            hp_dv, _ = _devig(_american_to_prob(home_am), _american_to_prob(away_am))
+            probs.append(hp_dv)
+    if not probs:
+        return None
+    return sum(probs) / len(probs)
 
 
 def best_runline(game_odds: dict, team_name: str, side: str) -> Optional[dict]:
@@ -271,6 +310,39 @@ def attach_game_edges(spread_lean: dict, game: dict, odds_list: list) -> dict:
     g = find_game(odds_list, game.get("home_team"), game.get("away_team"))
     if not g:
         return spread_lean
+
+    # ── Blend the de-vigged market into the model win% ──
+    # The model win% is a heuristic off the projected margin. The de-vigged
+    # market line is a stronger ML predictor, so blend them (market-weighted)
+    # and let the consensus pick the side — a strong market read can flip a
+    # razor-thin model lean. Falls through to model-only if the market is
+    # missing for this game.
+    market_home = market_home_winprob(g, game.get("home_team"), game.get("away_team"))
+    model_home = spread_lean.get("model_home_win_prob")
+    if market_home is not None and model_home is not None:
+        blended_home = ML_MARKET_WEIGHT * market_home + (1 - ML_MARKET_WEIGHT) * model_home
+        picked_home = blended_home >= 0.5
+        picked_prob = blended_home if picked_home else 1.0 - blended_home
+        team = game.get("home_team") if picked_home else game.get("away_team")
+        spread_lean["ml_pick"] = f"{team} ML"
+        spread_lean["ml_probability"] = round(picked_prob * 100)
+        spread_lean["ml_blended"] = True
+        spread_lean["ml_market_prob"] = round((market_home if picked_home else 1 - market_home) * 100)
+        spread_lean["ml_model_prob"] = round((model_home if picked_home else 1 - model_home) * 100)
+        # Keep the confidence label in sync with the blended probability.
+        p = spread_lean["ml_probability"]
+        spread_lean["confidence"] = "HIGH" if p >= 66 else ("MED" if p >= 57 else "LOW")
+
+        # Cross-market guardrail: the run line is still model-margin-based. If
+        # the blend flipped the ML to the opposite side of the model's run-line
+        # favorite, the model and market strongly disagree on who wins — don't
+        # surface a contradictory "favorite -1.5" run line. Neutralize it so the
+        # board stays coherent (when they disagree this hard the model is
+        # usually the one that's wrong).
+        model_fav_home = model_home >= 0.5
+        if picked_home != model_fav_home and " -1.5" in spread_lean.get("run_line_pick", ""):
+            spread_lean["run_line_probability"] = 0
+            spread_lean["run_line_suppressed"] = True
 
     # ── Moneyline edge ──
     ml_pick = spread_lean.get("ml_pick", "")

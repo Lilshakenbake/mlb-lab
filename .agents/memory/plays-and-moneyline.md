@@ -22,20 +22,30 @@ unders but pitcher unders are fine — do NOT strip pitcher unders.
 from the `top_*` buckets globally — those also feed per-game board pages.
 bases-board and hits-combos already filter OVER-only separately.
 
-# Moneyline factoring (build_spread_lean in src/predict.py)
+# Moneyline factoring (build_spread_lean + attach_game_edges)
 
-The ML pick + win% is a **heuristic**, not a real win-prob model:
-- team offensive index (lineup projected hits×0.8 + TB×1.0)
-- starter score (strikeouts_avg×0.22 − hits_allowed_avg×0.18)
-- flat home-field boost +0.65
-- weather (hot+windy +0.20, cold ≤52° −0.15)
-- margin = home_total − away_total; pick = higher side
-- win% = a **hardcoded bucket table** off |margin| (51% pickem → 72% at 4+)
+The model margin is a heuristic (lineup offense index + starter K/hits score +
+flat home-field boost + weather). margin = home_total − away_total.
 
-The live betting market does NOT pick the side. `live_odds.attach_game_edges`
-only prices the chosen pick: pulls best book ML, de-vigs, computes
-edge%/EV%/Kelly vs the heuristic probability.
+Two-stage probability:
+1. **Model win%** (`build_spread_lean`, src/predict.py): `_winprob_from_margin`
+   is a logistic curve (k=0.27) on the margin, clamped to [0.20, 0.80]. Returns
+   `model_home_win_prob` (0..1, home frame) + `model_ml_probability`.
+   Replaced the old hardcoded bucket table.
+2. **Market blend** (`attach_game_edges`, src/live_odds.py): when odds exist,
+   `market_home_winprob` de-vigs each book's two-way h2h and averages →
+   consensus P(home). Blend = `ML_MARKET_WEIGHT`(0.65)·market + 0.35·model.
+   The **blend picks the side** (can flip a thin model lean) and sets
+   `ml_pick`/`ml_probability`/`confidence`, plus `ml_blended`/`ml_market_prob`/
+   `ml_model_prob`. Then edge%/EV%/Kelly price the chosen side vs best book.
 
-**Weakness (if asked to improve ROI):** margin mixes incommensurate units, and
-win% is bucketed not distributional; de-vigged market prob is usually the single
-best ML predictor and isn't blended in.
+**Why market-weighted:** the de-vigged market line is the single best ML
+predictor; the model only nudges it and finds disagreement edges.
+
+**Cross-market guardrail:** the run line is still model-margin-based. If the
+blend flips ML opposite the model's `-1.5` favorite (strong model/market
+disagreement → model usually wrong), the RL is neutralized
+(`run_line_probability=0`, `run_line_suppressed=True`) so the board isn't
+contradictory.
+
+**Fallback:** no odds (free API exhausted) → no blend, model-only ML stands.
