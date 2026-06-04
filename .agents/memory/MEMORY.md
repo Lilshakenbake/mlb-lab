@@ -1,3 +1,4 @@
 - [Statcast xStat pipeline](statcast-xstat-pipeline.md) — statcast df is pitch-level; per-game rates must divide by PA (events.notna()), not row count, or xTB/contact_rate inflate ~4x.
 - [Count-stat probabilities](count-stat-probabilities.md) — hitter count props use Poisson/NB tails on the projection; a sane probability model surfaces (no longer masks) bad projections.
 - [Plays of the Day & moneyline](plays-and-moneyline.md) — hitter plays are OVER-only (filter in _build_plays_for_game); pitcher K unders kept on purpose; ML pick is a heuristic margin + bucket win%, market only prices the edge.
+- [F5 calibration](f5-calibration.md) — F5 base = total_lean projected_runs × 0.53; raw team score/3.4 runs high in sim data (teams hit 3.x-per-team cap); always pass full_game_proj from total_lean.

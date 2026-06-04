@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F5 Totals · MLB Lab</title>
+<style>
+    body { background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:0; }
+    .container { max-width:780px; margin:0 auto; padding:18px 14px 80px; }
+    h1 { font-size:22px; margin:6px 0 2px; text-align:center; }
+    .sub { color:#94a3b8; font-size:13px; margin:0 0 14px; text-align:center; }
+    .topnav { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:13px; }
+    .topnav a { color:#93c5fd; text-decoration:none; font-weight:600; }
+    .legend {
+        background:#1e293b; border:1px solid #334155; border-radius:10px;
+        padding:10px 12px; margin-bottom:14px; font-size:12px; color:#cbd5e1; line-height:1.6;
+    }
+    .legend b { color:#fde68a; }
+    .refresh { font-size:11px; color:#64748b; text-align:right; margin:4px 0 8px; }
+    .row {
+        background:#1e293b; border:1px solid #334155; border-radius:10px;
+        padding:12px 14px; margin-bottom:8px;
+    }
+    .row-top { display:flex; align-items:center; gap:10px; }
+    .rank { font-size:13px; font-weight:800; color:#64748b; min-width:22px; text-align:right; }
+    .body { flex:1; min-width:0; }
+    .matchup { font-size:14px; font-weight:700; color:#e2e8f0; }
+    .pick-badge {
+        display:inline-block; padding:2px 8px; border-radius:999px;
+        font-size:12px; font-weight:700; margin-left:6px;
+    }
+    .pick-over  { background:#14532d; color:#4ade80; }
+    .pick-under { background:#1e1b4b; color:#a5b4fc; }
+    .pick-lean  { background:#292524; color:#d6d3d1; }
+    .meta { color:#94a3b8; font-size:11px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .pitchers { color:#64748b; font-size:11px; margin-top:2px; }
+    .prob {
+        font-size:20px; font-weight:800;
+        font-variant-numeric:tabular-nums; min-width:58px; text-align:right;
+    }
+    .prob.over  { color:#34d399; }
+    .prob.under { color:#818cf8; }
+    .prob.lean  { color:#94a3b8; }
+    .detail {
+        margin-top:8px; padding-top:8px; border-top:1px solid #1e293b;
+        font-size:11px; color:#94a3b8;
+        display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;
+    }
+    .detail-item { text-align:center; }
+    .detail-item .val { font-size:14px; font-weight:700; color:#e2e8f0; }
+    .detail-item .lbl { color:#64748b; font-size:10px; margin-top:1px; }
+    .conf { font-size:10px; font-weight:700; border-radius:4px; padding:1px 5px; margin-left:6px; }
+    .conf-high { background:#14532d; color:#4ade80; }
+    .conf-med  { background:#78350f; color:#fcd34d; }
+    .conf-low  { background:#1e293b; color:#64748b; }
+    .why { font-size:11px; color:#64748b; margin-top:5px; font-style:italic; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .empty {
+        text-align:center; color:#94a3b8; padding:40px 12px;
+        background:#1e293b; border-radius:12px; border:1px dashed #334155;
+    }
+    .computing { text-align:center; color:#94a3b8; padding:20px; font-size:13px; }
+    .fair-odds { font-size:11px; color:#64748b; margin-left:4px; }
+</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/sleek.css') }}">
+</head>
+<body>
+<div class="container">
+    <div class="topnav">
+        <a href="/">← Slate</a>
+        <a href="/bases">Bases</a>
+        <a href="/watchlist">Watchlist</a>
+    </div>
+
+    <h1>⚾ F5 Totals</h1>
+    <p class="sub">First-5-innings Over/Under lean for every game tonight</p>
+
+    <div class="legend">
+        <b>How it works:</b> Both starters' Statcast quality (xwOBA allowed, barrel%, hard-hit%) + team
+        offense + park + weather projected through 5 innings. Line is 4.5.
+        <b>HIGH</b> = edge ≥1.0 run · <b>MED</b> = ≥0.5 · <b>LOW</b> = &lt;0.5
+    </div>
+
+    <div class="refresh" id="ts"></div>
+    <div id="board"></div>
+</div>
+
+<script>
+const board = document.getElementById('board');
+const tsEl  = document.getElementById('ts');
+
+function pickClass(pick) {
+    if (pick === 'OVER')  return 'over';
+    if (pick === 'UNDER') return 'under';
+    return 'lean';
+}
+
+function confBadge(conf) {
+    const cls = conf === 'HIGH' ? 'conf-high' : conf === 'MED' ? 'conf-med' : 'conf-low';
+    return `<span class="conf ${cls}">${conf}</span>`;
+}
+
+function oddsStr(n) {
+    if (n == null) return '';
+    return n > 0 ? `+${n}` : `${n}`;
+}
+
+function render(items, computing) {
+    if (computing && !items.length) {
+        board.innerHTML = '<div class="computing">⏳ Computing F5 projections…</div>';
+        return;
+    }
+    if (!items.length) {
+        board.innerHTML = '<div class="empty">No F5 data yet — check back once lineups are posted.</div>';
+        return;
+    }
+    board.innerHTML = items.map((g, i) => {
+        const pc   = pickClass(g.pick);
+        const prob = g.probability != null ? g.probability.toFixed(1) + '%' : '—';
+        const proj = g.projected_runs != null ? g.projected_runs.toFixed(1) : '—';
+        const line = g.line != null ? g.line.toFixed(1) : '4.5';
+        const odds = oddsStr(g.fair_odds);
+        const hp   = g.home_pitcher || 'TBD';
+        const ap   = g.away_pitcher || 'TBD';
+        const why  = g.why || '';
+        return `
+<div class="row">
+  <div class="row-top">
+    <div class="rank">${i+1}</div>
+    <div class="body">
+      <div class="matchup">
+        ${g.matchup || ''}
+        <span class="pick-badge pick-${pc.toLowerCase()}">${g.pick}</span>
+        ${confBadge(g.confidence || 'LOW')}
+        ${odds ? `<span class="fair-odds">${odds}</span>` : ''}
+      </div>
+      <div class="pitchers">SP: ${ap} vs ${hp}</div>
+      <div class="why">${why}</div>
+    </div>
+    <div class="prob ${pc}">${prob}</div>
+  </div>
+  <div class="detail">
+    <div class="detail-item"><div class="val">${proj}</div><div class="lbl">Proj Runs</div></div>
+    <div class="detail-item"><div class="val">${line}</div><div class="lbl">Line</div></div>
+    <div class="detail-item"><div class="val">${proj !== '—' && line ? (parseFloat(proj) - parseFloat(line) >= 0 ? '+' : '') + (parseFloat(proj) - parseFloat(line)).toFixed(1) : '—'}</div><div class="lbl">Edge</div></div>
+  </div>
+</div>`;
+    }).join('');
+}
+
+async function load() {
+    try {
+        const r = await fetch('/api/f5');
+        const d = await r.json();
+        if (d.ts) {
+            const t = new Date(d.ts * 1000);
+            tsEl.textContent = 'Updated ' + t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+        }
+        render(d.f5 || [], d.computing);
+        if (d.computing) setTimeout(load, 8000);
+    } catch(e) {
+        board.innerHTML = '<div class="empty">Failed to load — try refreshing.</div>';
+    }
+}
+
+load();
+</script>
+</body>
+</html>

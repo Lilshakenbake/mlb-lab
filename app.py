@@ -20,6 +20,7 @@ from src.predict import (
     build_pitcher_k_prop,
     build_spread_lean,
     build_total_lean,
+    build_f5_lean,
     compute_hr_threat,
     compute_nrfi,
     build_hrr_combo,
@@ -60,6 +61,7 @@ _PLAYS_LOCK = threading.Lock()
 # always 0.5 and the standard edge logic biases toward UNDER.
 HR_THREATS_CACHE = {"ts": 0, "data": []}
 NRFI_CACHE = {"ts": 0, "data": []}
+F5_CACHE = {"ts": 0, "data": []}
 SPECIALS_CACHE = {"ts": 0, "data": {
     "run_line": None,
     "sgp": None,
@@ -393,6 +395,24 @@ def build_game_boards(game):
         nrfi["home_pitcher"] = home_pitcher_name
         nrfi["away_pitcher"] = away_pitcher_name
 
+    f5 = build_f5_lean(
+        game=game,
+        home_team_score=home_team_score,
+        away_team_score=away_team_score,
+        home_pitcher_profile=home_pitcher_profile,
+        away_pitcher_profile=away_pitcher_profile,
+        weather=weather,
+        park_name=park_name,
+        full_game_proj=(total_lean or {}).get("projected_runs"),
+    )
+    if f5:
+        f5["matchup"] = matchup_label
+        f5["game_pk"] = game.get("gamePk")
+        f5["home_pitcher"] = home_pitcher_name
+        f5["away_pitcher"] = away_pitcher_name
+        f5["game_time"] = game.get("game_time", "")
+        f5["stat_label"] = "F5 Total"
+
     # ── 1+ H/R/RBI prop board: one row per hitter with combined hits +
     # runs + RBIs >= 1 probability (the "any of three" high-floor prop).
     hrr_combo = []
@@ -456,6 +476,7 @@ def build_game_boards(game):
         "projected_mode": projected_mode,
         "hr_threats": hr_threats,
         "nrfi": nrfi,
+        "f5": f5,
         "hrr_combo": sorted(hrr_combo, key=lambda x: x["probability"], reverse=True),
     }
 
@@ -823,6 +844,7 @@ def _run_ai_review_pass():
         hr_snapshot = [copy.deepcopy(h) for h in HR_THREATS_CACHE["data"]]
         plays_snapshot = [copy.deepcopy(p) for p in PLAYS_CACHE["data"]]
         nrfi_snapshot = [copy.deepcopy(n) for n in NRFI_CACHE["data"]]
+        f5_snapshot = [copy.deepcopy(f) for f in F5_CACHE["data"]]
     # Tag categorical labels so _pick_key stays unique across boards and
     # the AI prompt clearly states what each pick is for.
     for h in hr_snapshot:
@@ -832,10 +854,10 @@ def _run_ai_review_pass():
         c.setdefault("stat_label", "1+ H/R/RBI")
         c.setdefault("pick", "OVER")
     for n in nrfi_snapshot:
-        # NRFI/YRFI: pick is already "NRFI" or "YRFI" from compute_nrfi.
-        # Tag stat_label so the AI knows it's a 1st-inning runs market.
         n["stat_label"] = "NRFI/YRFI"
-    bundle = locks_snapshot + hrr_snapshot + hr_snapshot + plays_snapshot + nrfi_snapshot
+    for f in f5_snapshot:
+        f["stat_label"] = "F5 Total"
+    bundle = locks_snapshot + hrr_snapshot + hr_snapshot + plays_snapshot + nrfi_snapshot + f5_snapshot
     if not bundle:
         return
     reviews = ai_review.review_picks(bundle, kind="mlb-slate-all")
@@ -846,6 +868,7 @@ def _run_ai_review_pass():
     ai_review.attach_reviews(hr_snapshot, reviews)
     ai_review.attach_reviews(plays_snapshot, reviews)
     ai_review.attach_reviews(nrfi_snapshot, reviews)
+    ai_review.attach_reviews(f5_snapshot, reviews)
     # Atomic publish — replace the list refs entirely so a reader holding
     # the old list never sees a dict get an `ai_review` key bolted on after
     # the fact.
@@ -855,6 +878,7 @@ def _run_ai_review_pass():
         HR_THREATS_CACHE["data"] = hr_snapshot
         PLAYS_CACHE["data"] = plays_snapshot
         NRFI_CACHE["data"] = nrfi_snapshot
+        F5_CACHE["data"] = f5_snapshot
     print(f"[ai-review] attached {len(reviews)} verdicts across {len(bundle)} picks")
 
 
@@ -870,6 +894,7 @@ def _refresh_plays_blocking():
         all_plays = []
         all_hr_threats = []
         all_nrfi = []
+        all_f5 = []
         all_hrr = []
 
         def _publish_partial():
@@ -879,6 +904,7 @@ def _refresh_plays_blocking():
             sorted_plays = sorted(all_plays, key=lambda p: p.get("probability", 0), reverse=True)
             sorted_hr = sorted(all_hr_threats, key=lambda x: x.get("probability", 0), reverse=True)
             sorted_nrfi = sorted(all_nrfi, key=lambda x: x.get("probability", 0), reverse=True)
+            sorted_f5 = sorted(all_f5, key=lambda x: x.get("probability", 0), reverse=True)
             sorted_hrr = sorted(all_hrr, key=lambda x: x.get("probability", 0), reverse=True)
             # Diversify the displayed plays. Two-pass strategy guarantees
             # that EVERY game on the slate gets at least one entry on the
@@ -981,6 +1007,8 @@ def _refresh_plays_blocking():
                 RAW_HR_THREATS_CACHE["data"] = list(sorted_hr)
                 NRFI_CACHE["ts"] = time.time()
                 NRFI_CACHE["data"] = sorted_nrfi
+                F5_CACHE["ts"] = time.time()
+                F5_CACHE["data"] = sorted_f5
                 HRR_COMBO_CACHE["ts"] = time.time()
                 HRR_COMBO_CACHE["data"] = hrr_diversified
                 # Raw, uncapped HRR combos for the solver pool.
@@ -1004,7 +1032,7 @@ def _refresh_plays_blocking():
                 SPECIALS_CACHE["data"] = specials
 
         def _absorb_game(g):
-            """Run one game's board build and merge its plays + HR threats + NRFI + HRR combo."""
+            """Run one game's board build and merge its plays + HR threats + NRFI + F5 + HRR combo."""
             game_pk = g.get("gamePk")
             try:
                 all_plays.extend(_build_plays_for_game(g))
@@ -1014,6 +1042,9 @@ def _refresh_plays_blocking():
                     nrfi_entry = cached["data"].get("nrfi")
                     if nrfi_entry:
                         all_nrfi.append(nrfi_entry)
+                    f5_entry = cached["data"].get("f5")
+                    if f5_entry:
+                        all_f5.append(f5_entry)
                     all_hrr.extend(cached["data"].get("hrr_combo", []) or [])
             except Exception as e:
                 print(f"[plays-refresh] game {game_pk} failed: {e}")
@@ -1038,13 +1069,16 @@ def _refresh_plays_blocking():
                             nrfi_entry = cached["data"].get("nrfi")
                             if nrfi_entry:
                                 all_nrfi.append(nrfi_entry)
+                            f5_entry = cached["data"].get("f5")
+                            if f5_entry:
+                                all_f5.append(f5_entry)
                             all_hrr.extend(cached["data"].get("hrr_combo", []) or [])
                     except Exception as e:
                         print(f"[plays-refresh] game {game_pk} failed: {e}")
                     gc.collect()
                     _publish_partial()
 
-        print(f"[plays-refresh] done: {len(all_plays)} plays, {len(all_hr_threats)} HR threats")
+        print(f"[plays-refresh] done: {len(all_plays)} plays, {len(all_hr_threats)} HR threats, {len(all_f5)} F5")
         # OpenAI second-opinion pass over the published top picks. Runs once
         # per refresh cycle and uses gpt-4o-mini, so cost stays small. If the
         # API call fails or no key is set, this is a no-op.
@@ -1133,6 +1167,24 @@ def api_nrfi():
         ts = NRFI_CACHE["ts"]
         computing = PLAYS_CACHE["computing"]
     return jsonify({"nrfi": data, "ts": ts, "computing": computing})
+
+
+@app.route("/api/f5", methods=["GET"])
+@login_required
+def api_f5():
+    """First-5-innings Over/Under board for every game tonight."""
+    _ensure_plays_refresh()
+    with _PLAYS_LOCK:
+        data = list(F5_CACHE["data"])
+        ts = F5_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+    return jsonify({"f5": data, "ts": ts, "computing": computing})
+
+
+@app.route("/f5", methods=["GET"])
+@login_required
+def f5_page():
+    return render_template("f5.html")
 
 
 @app.route("/api/locks", methods=["GET"])

@@ -1349,6 +1349,130 @@ def build_total_lean(game, home_team_score, away_team_score,
     }
 
 
+def build_f5_lean(game, home_team_score, away_team_score,
+                  home_pitcher_profile, away_pitcher_profile,
+                  weather, park_name=None, full_game_proj=None):
+    """Project first-5-innings total runs and pick Over/Under.
+
+    Base: uses `full_game_proj` (the calibrated full-game total from
+    build_total_lean, already incorporating park + weather + pitcher
+    hits/K adjustments) scaled to F5 via the empirical 0.53 ratio
+    (F5 avg 4.6 / full-game avg 8.7 ≈ 0.53). Falls back to the raw
+    team offensive indices when full_game_proj is not supplied.
+
+    On top of that base, adds a Statcast-quality delta per starter:
+    xwOBA_allowed, barrel_allowed, hard_hit_allowed capture power
+    suppression beyond what the hits/K rates already encode.
+
+    Default line is 4.5. Returns None if pitcher profiles aren't
+    available (can't compute the Statcast quality modifier).
+    """
+    import math
+
+    if not home_pitcher_profile or not away_pitcher_profile:
+        return None
+
+    # ── Base F5 projection ────────────────────────────────────────────
+    # Prefer the full-game projection already computed by build_total_lean
+    # (park + weather + hits/K pitcher adj all baked in); scale to F5.
+    # Without it, fall back to raw offensive index / divisor approach.
+    if full_game_proj and full_game_proj > 0:
+        # 0.53 = empirical F5/game ratio (starters face lineup 2x and
+        # are sharper early; bullpen relief in inn 6+ is additive).
+        base_f5 = float(full_game_proj) * 0.53
+    else:
+        home_runs = max(2.0, home_team_score / 3.4)
+        away_runs = max(2.0, away_team_score / 3.4)
+
+        def _f5_base_pitcher_adj(profile):
+            k = float(profile.get("strikeouts_avg") or 6.0)
+            h = float(profile.get("hits_allowed_avg") or 8.0)
+            adj = -(k - 6.0) * 0.08 + (h - 8.0) * 0.10
+            return adj
+
+        home_runs += _f5_base_pitcher_adj(away_pitcher_profile)
+        away_runs += _f5_base_pitcher_adj(home_pitcher_profile)
+        base_f5 = (max(2.0, home_runs) + max(2.0, away_runs)) * 0.53
+
+    base_f5 = max(2.5, min(7.5, base_f5))
+
+    # Per-team split for the why string.
+    home_f5_base = base_f5 / 2.0
+    away_f5_base = base_f5 / 2.0
+
+    # ── Statcast quality delta ────────────────────────────────────────
+    # _pitcher_quality_index captures xwOBA_allowed, barrel, hard-hit
+    # — signals the hits/K adjustment above doesn't cover. Each unit
+    # of qi shifts ~0.10 runs per team (±0.20 total F5 at extremes).
+    def _statcast_delta(opp_profile):
+        qi = _pitcher_quality_index(opp_profile)
+        return qi * 0.10  # qi>0 = hittable → more runs; qi<0 = ace → fewer
+
+    home_delta = _statcast_delta(away_pitcher_profile)  # home bats vs away P
+    away_delta = _statcast_delta(home_pitcher_profile)  # away bats vs home P
+
+    home_f5 = max(0.8, min(3.2, home_f5_base + home_delta))
+    away_f5 = max(0.8, min(3.2, away_f5_base + away_delta))
+
+    # ── Why bits (context already in base_f5 via build_total_lean) ────
+    why_bits = []
+    home_qi = _pitcher_quality_index(away_pitcher_profile)
+    away_qi = _pitcher_quality_index(home_pitcher_profile)
+    if home_qi <= -0.5:
+        why_bits.append(f"ace vs home ({home_qi:+.1f})")
+    elif home_qi >= 0.5:
+        why_bits.append(f"hittable arm vs home ({home_qi:+.1f})")
+    if away_qi <= -0.5:
+        why_bits.append(f"ace vs away ({away_qi:+.1f})")
+    elif away_qi >= 0.5:
+        why_bits.append(f"hittable arm vs away ({away_qi:+.1f})")
+
+    projected_f5 = round(max(2.5, min(7.5, home_f5 + away_f5)), 1)
+
+    line = 4.5
+    edge = projected_f5 - line
+
+    if edge >= 0.35:
+        pick = "OVER"
+    elif edge <= -0.35:
+        pick = "UNDER"
+    else:
+        pick = "LEAN"
+
+    z = edge / 1.0
+    raw_prob = 0.5 + 0.5 * math.erf(z / math.sqrt(2))
+    raw_prob = max(0.15, min(0.85, raw_prob))
+
+    if pick == "OVER":
+        probability = round(raw_prob * 100, 1)
+    elif pick == "UNDER":
+        probability = round((1.0 - raw_prob) * 100, 1)
+    else:
+        probability = round(max(raw_prob, 1.0 - raw_prob) * 100, 1)
+
+    abs_edge = abs(edge)
+    confidence = "HIGH" if abs_edge >= 1.0 else ("MED" if abs_edge >= 0.5 else "LOW")
+
+    why = (
+        f"Home ~{round(home_f5, 1)} R · Away ~{round(away_f5, 1)} R"
+        f" · Proj {projected_f5} vs {line} line"
+    )
+    if why_bits:
+        why += " · " + ", ".join(why_bits)
+
+    return {
+        "pick": pick,
+        "projected_runs": projected_f5,
+        "line": line,
+        "probability": probability,
+        "confidence": confidence,
+        "fair_odds": _prob_to_american(
+            raw_prob if pick != "UNDER" else (1.0 - raw_prob)
+        ),
+        "why": why,
+    }
+
+
 def compute_nrfi(game, home_pitcher_profile, away_pitcher_profile, weather, park_name=None):
     """Compute No-Runs-First-Inning probability for a game.
 
