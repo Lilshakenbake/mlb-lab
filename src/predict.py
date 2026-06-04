@@ -663,7 +663,81 @@ def _weather_adjustment(stat_type, weather):
     return adj, note
 
 
-def _pitcher_adjustment(stat_type, pitcher_hits_allowed):
+def _pitcher_quality_index(profile):
+    """Continuous quality score in [-1.5, +1.5] from Statcast contact signals.
+
+    Negative = elite (suppresses hits/power), positive = hittable.
+    Signal blend: xwOBA_allowed 50%, barrel_allowed 25%,
+    hard_hit_allowed 15%, hits_allowed_avg 10%.
+    Falls back gracefully when Statcast signals aren't available.
+
+    League baselines:
+      xwOBA_allowed  ≈ 0.315  (σ ≈ 0.050)
+      barrel_allowed ≈ 0.065  (σ ≈ 0.025)
+      hard_hit_rate  ≈ 0.370  (σ ≈ 0.040)
+      hits_allowed   ≈ 5.5/g  (σ ≈ 1.5)
+    """
+    signals = []
+
+    xwoba = profile.get("xwoba_allowed")
+    if xwoba is not None:
+        signals.append(((float(xwoba) - 0.315) / 0.050, 0.50))
+
+    barrel = profile.get("barrel_allowed")
+    if barrel is not None:
+        signals.append(((float(barrel) - 0.065) / 0.025, 0.25))
+
+    hard_hit = profile.get("hard_hit_allowed")
+    if hard_hit is not None:
+        signals.append(((float(hard_hit) - 0.370) / 0.040, 0.15))
+
+    hits_pg = profile.get("hits_allowed_avg")
+    if hits_pg is not None:
+        signals.append(((float(hits_pg) - 5.5) / 1.5, 0.10))
+
+    if not signals:
+        return 0.0
+
+    total_w = sum(w for _, w in signals)
+    qi = sum(z * w for z, w in signals) / total_w
+    return max(-1.5, min(1.5, qi))
+
+
+def _pitcher_adjustment(stat_type, pitcher_hits_allowed, opp_pitcher_profile=None):
+    """Adjust hitter projection based on opposing pitcher quality.
+
+    When the full pitcher profile is available, uses a continuous Statcast
+    quality index (xwOBA_allowed + barrel_allowed + hard_hit_allowed +
+    hits_allowed) so the model distinguishes an ace from a fringe starter
+    on a smooth scale rather than 3 fixed buckets.  Falls back to the
+    legacy hits-only bucket table when no profile is provided.
+    """
+    if opp_pitcher_profile:
+        qi = _pitcher_quality_index(opp_pitcher_profile)
+        # qi > 0 → pitcher gives up more contact → boost projection
+        # qi < 0 → elite arm → suppress projection
+        # Scale factors tuned so a true ace (qi ≈ -1) adjusts ~10-15%,
+        # a homer-prone arm (qi ≈ +1) adjusts +10-18% depending on stat.
+        if stat_type == "hits":
+            adj = qi * 0.12        # ±0.18 at clamp extremes
+        elif stat_type == "total_bases":
+            adj = qi * 0.18        # ±0.27 — power is more sensitive to quality
+        elif stat_type == "home_runs":
+            adj = qi * 0.06        # ±0.09 — HR path has its own barrel signal
+        elif stat_type == "rbis":
+            adj = qi * 0.10        # ±0.15
+        else:
+            return 0.0, "No pitcher adjustment"
+
+        if abs(adj) >= 0.08:
+            note = ("Elite opposing arm" if qi < 0 else "Hittable arm")
+        elif abs(adj) >= 0.04:
+            note = ("Strong opposing pitcher" if qi < 0 else "Weak opposing pitcher")
+        else:
+            note = "Neutral matchup"
+        return round(adj, 3), note
+
+    # ── Legacy fallback: hits-allowed bucket table ───────────────────────
     if pitcher_hits_allowed is None:
         return 0.0, "No pitcher adjustment"
 
@@ -675,9 +749,6 @@ def _pitcher_adjustment(stat_type, pitcher_hits_allowed):
         return 0.0, "Neutral matchup"
 
     if stat_type == "total_bases":
-        # Wider buckets so aces really damp TB and homer-prone arms boost it.
-        # Note: this is the legacy hits-only path; the richer power-allowed
-        # adjustment lives in build_hitter_prop via opp_pitcher_profile.
         if pitcher_hits_allowed >= 8.0:
             return 0.30, "Very weak opposing pitcher"
         if pitcher_hits_allowed >= 7.0:
@@ -777,7 +848,9 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
                       opp_pitcher_profile=None, park_name=None, opp_team=None):
     lineup_boost = _lineup_boost(stat_type, lineup_index)
     weather_boost, weather_note = _weather_adjustment(stat_type, weather)
-    pitcher_adjustment, matchup_note = _pitcher_adjustment(stat_type, pitcher_hits_allowed)
+    pitcher_adjustment, matchup_note = _pitcher_adjustment(
+        stat_type, pitcher_hits_allowed, opp_pitcher_profile=opp_pitcher_profile
+    )
 
     model_used = False
     model_std = None
