@@ -379,7 +379,11 @@ def get_last5_hitter_profile(player_name):
         # Per-stat blended means (these REPLACE the old weighted_mean output
         # but keep the same field names so predict.py needs no changes).
         hits_blend = _season_l15_blend(hits_full)
-        hr_blend = _season_l15_blend(hr_full)
+        # HR is a rare event (~0.09/game league avg). In 15 games a player
+        # can hit 0 HRs by chance, making L15 very noisy. Use a lower weight
+        # so the stable season baseline anchors the projection. Hits/TB/RBI
+        # keep the default 65% L15 weight — they're frequent enough to trust.
+        hr_blend = _season_l15_blend(hr_full, l15_weight=0.45)
         tb_blend = _season_l15_blend(tb_full)
         rbi_blend = _season_l15_blend(rbi_full)
 

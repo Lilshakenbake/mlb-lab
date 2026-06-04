@@ -336,12 +336,21 @@ def _xstat_blend(stat_type, base_projection, hitter_profile):
         return max(min(result, hi), lo)
 
     elif stat_type == "home_runs":
-        # Barrel rate is the single best HR predictor — about 25% of barrels
-        # actually leave the yard on average.
+        # Two-source xHR blend mirrors compute_hr_threat so both boards use
+        # the same underlying Statcast signal mix.
+        # - Barrels: ~25% leave the yard — the strongest per-contact signal.
+        # - Fly balls: ~10% of all FB become HR (weaker, adds stability).
+        # Barrel carries 70%, flyball 30%, then blended 55/45 with raw rate.
         bbl = hitter_profile.get("barrel_rate")
         bbe = hitter_profile.get("bbe_per_game")
+        fb = hitter_profile.get("fly_ball_rate")
         if bbl is not None and bbe is not None:
-            x_hr = float(bbl) * float(bbe) * 0.25
+            x_hr_barrel = float(bbl) * float(bbe) * 0.25
+            if fb is not None:
+                x_hr_fb = float(fb) * float(bbe) * 0.10
+                x_hr = 0.70 * x_hr_barrel + 0.30 * x_hr_fb
+            else:
+                x_hr = x_hr_barrel
             return 0.55 * base_projection + 0.45 * x_hr
 
     elif stat_type == "rbis":
@@ -955,6 +964,17 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         # projection already carries every context factor (park, platoon,
         # weather, bullpen, xStats, ML blend), so it's the right mean to use.
         p_over = _ml.count_prob_over(projection, line, stat_type)
+
+        # Distributional consistency gate: the raw-edge break-even (proj >
+        # line) doesn't match the Poisson/NB break-even at X.5 lines.
+        # Example — Hits OVER 0.5: P(1+ hit) = 1 - e^{-mu}; the 50% crossover
+        # is at mu = ln(2) ≈ 0.693, NOT 0.5. A projection of 0.62 gives
+        # edge +0.12 (picks OVER) but P(OVER) = 46% (UNDER is favored). Force
+        # PASS whenever the distribution says UNDER is more likely — a surfaced
+        # pick should always be on the right side of the true probability.
+        if pick == "OVER" and p_over < 0.50:
+            pick = "PASS"
+
         p_side = p_over if pick != "UNDER" else (1.0 - p_over)
         probability = round(p_side * 100, 1)
     elif model_used and model_std:
