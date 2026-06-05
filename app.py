@@ -1996,35 +1996,37 @@ def _solve_challenge(pool: list[dict], stake: float, target_today: float,
     def _passes_diversification(combo):
         return True
 
-    # Pool size shrinks as leg count grows so we never evaluate millions of
-    # combos. Safe risk style: we want HIGH-prob legs first, so the deeper
-    # pool only matters for 2-3 leggers where we can afford the search.
-    # C(30,3)=4060, C(20,5)=15504, C(15,7)=6435, C(12,8)=495 — all tractable.
-    # Larger candidate pools now that RAW_PLAYS_CACHE feeds the full catalog
-    # (was ~20 plays max from the diversified display list, now hundreds).
-    # C(60,2)=1770, C(50,3)=19600, C(35,4)=52k, C(25,5)=53k — still tractable.
-    pool_for_n = {2: 60, 3: 50, 4: 35, 5: 25, 6: 20, 7: 16, 8: 14}
+    # Pre-reduce pool to best pick per game (highest composite score).
+    # This guarantees one-per-game without any inner-loop filtering and
+    # keeps the candidate set small: C(15,2)=105, C(15,8)=6435 — all fast.
+    # Before this change the flat pool_for_n caps (14–60 entries) could
+    # fill up with multiple picks from the same popular game, leaving the
+    # solver unable to form 8-leg parlays even when 8 distinct games exist.
+    best_per_game: dict = {}
+    for p in pool:
+        gpk = p.get("game_pk")
+        if gpk is None:
+            continue
+        score = _composite_score(p)
+        if gpk not in best_per_game or score > best_per_game[gpk][0]:
+            best_per_game[gpk] = (score, p)
+    # Sorted best-per-game by composite score — safest first.
+    game_candidates = [p for _, p in sorted(best_per_game.values(),
+                                            key=lambda t: -t[0])]
 
     out = []
     seen_signatures: set = set()
     # Iterate smallest leg counts first; stop early once we have enough at
     # the smallest viable n (Safe style prefers fewer legs).
     for n in range(2, max_legs + 1):
-        size = pool_for_n.get(n, 12)
-        # Rank by composite score (prob × market edge) instead of raw prob.
-        # Real parlay math still uses actual probability — composite only
-        # decides which picks make the top-N candidate pool.
-        top = sorted(pool, key=_composite_score, reverse=True)[:size]
+        top = game_candidates  # already one-per-game, all eligible
         if len(top) < n:
             continue
         n_added = 0
         for combo in combinations(top, n):
-            gpks = [c.get("game_pk") for c in combo]
-            valid = [g for g in gpks if g is not None]
-            if len(valid) != len(set(valid)):
-                continue  # two legs in same game
+            # game_pk uniqueness is guaranteed by construction — no check needed.
             if not _passes_diversification(combo):
-                continue  # too many HRs or Ks in one parlay (correlated)
+                continue
             # Use CALIBRATED probabilities for parlay math so the odds and
             # hit-rate shown to the user are honest, not the inflated raw
             # model number. Tracker shows raw is ~7pp overconfident in the
