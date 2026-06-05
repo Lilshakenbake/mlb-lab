@@ -914,7 +914,9 @@ def _refresh_plays_blocking():
             diversified = []
             seen_ids: set[int] = set()
             game_counts: dict = {}
+            game_stat_shown: dict = {}   # gpk → set of stat_labels already in display
             # Pass 1: top play from each unique game (sorted by prob desc).
+            # Usually wins with a Hits pick at ~83%.
             for p in sorted_plays:
                 gpk = p.get("game_pk")
                 if gpk is None or gpk in game_counts:
@@ -922,11 +924,38 @@ def _refresh_plays_blocking():
                 diversified.append(p)
                 seen_ids.add(id(p))
                 game_counts[gpk] = 1
+                game_stat_shown[gpk] = {p.get("stat_label")}
             # Total slots scale with slate size so a 15-game card isn't
             # crammed into a fixed 20-row list.
             target = max(PLAYS_LIMIT, len(game_counts) * 2)
-            # Pass 2: fill with the next-best plays, respecting per-game cap.
+            # Pass 2: hitter stat-type diversity — one play per game of a
+            # DIFFERENT hitter stat type (Total Bases or RBIs) than what's
+            # already shown. Restricted to hitter kinds so Strikeouts (the
+            # next-highest-prob pick at ~75%) doesn't steal this diversity
+            # slot before TB/RBI get a chance.
+            _HITTER_STATS = {"Hits", "Total Bases", "RBIs", "Home Runs", "Steals"}
             for p in sorted_plays:
+                if len(diversified) >= target:
+                    break
+                if id(p) in seen_ids:
+                    continue
+                sl = p.get("stat_label")
+                if sl not in _HITTER_STATS:
+                    continue   # defer pitching stats to Pass 3
+                gpk = p.get("game_pk")
+                if gpk is not None and game_counts.get(gpk, 0) >= PLAYS_PER_GAME_CAP:
+                    continue
+                if gpk is not None and sl in game_stat_shown.get(gpk, set()):
+                    continue   # same hitter stat type already shown for this game
+                diversified.append(p)
+                seen_ids.add(id(p))
+                game_counts[gpk] = game_counts.get(gpk, 0) + 1
+                game_stat_shown.setdefault(gpk, set()).add(sl)
+            # Pass 3: fill any remaining slots by prob within per-game cap,
+            # no stat-type restriction (Strikeouts, ML, RL, extra hitter slots).
+            for p in sorted_plays:
+                if len(diversified) >= target:
+                    break
                 if id(p) in seen_ids:
                     continue
                 gpk = p.get("game_pk")
@@ -935,8 +964,6 @@ def _refresh_plays_blocking():
                 diversified.append(p)
                 seen_ids.add(id(p))
                 game_counts[gpk] = game_counts.get(gpk, 0) + 1
-                if len(diversified) >= target:
-                    break
 
             # Same first-pass-per-game treatment for HRR combos so the
             # 1+ H/R/RBI board doesn't get monopolized by 1-2 games. Also
