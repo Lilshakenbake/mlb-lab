@@ -1517,6 +1517,61 @@ def bases_page():
     return render_template("bases.html")
 
 
+@app.route("/one-base", methods=["GET"])
+@login_required
+def one_base_page():
+    return render_template("one_base.html")
+
+
+@app.route("/api/one-base-board", methods=["GET"])
+@login_required
+def api_one_base_board():
+    """All hitters with ≥65% calibrated probability of 1+ base (Hits OVER 0.5).
+
+    No per-game cap — every qualifying player on the full slate is listed.
+    Only OVERs. Sorted by calibrated probability descending.
+    1+ base == Hits OVER 0.5 (any hit gives ≥1 total base).
+    """
+    with _PLAYS_LOCK:
+        pool = list(RAW_PLAYS_CACHE["data"] or PLAYS_CACHE["data"])
+        ts = PLAYS_CACHE["ts"]
+        computing = PLAYS_CACHE["computing"]
+
+    rows = []
+    for p in pool:
+        if p.get("stat_label") != "Hits":
+            continue
+        if p.get("pick") != "OVER":
+            continue
+        cp = _calibrated_probability(p)
+        if cp < 65.0:
+            continue
+        rows.append({
+            "player": p.get("headline") or p.get("player"),
+            "stat": "1+ Base",
+            "pick": "OVER",
+            "line": p.get("line"),
+            "projection": p.get("projection"),
+            "probability": round(float(cp), 1),
+            "raw_probability": p.get("probability"),
+            "matchup": p.get("matchup"),
+            "game_pk": p.get("game_pk"),
+            "market_edge_pct": p.get("market_edge_pct"),
+            "model_used": p.get("model_used", False),
+        })
+
+    rows.sort(key=lambda r: -r["probability"])
+
+    return jsonify({
+        "ok": True,
+        "ts": ts,
+        "computing": bool(computing),
+        "pool_size": len(pool),
+        "total_qualifying": len(rows),
+        "rows": rows,
+    })
+
+
 @app.route("/hits-combos", methods=["GET"])
 @login_required
 def hits_combos_page():

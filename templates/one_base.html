@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ultimate Base Parlay · MLB Lab</title>
+<style>
+    body { background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:0; }
+    .container { max-width:780px; margin:0 auto; padding:18px 14px 80px; }
+    h1 { font-size:22px; margin:6px 0 2px; text-align:center; }
+    .sub { color:#94a3b8; font-size:13px; margin:0 0 14px; text-align:center; }
+    .topnav { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:13px; }
+    .topnav a { color:#93c5fd; text-decoration:none; font-weight:600; }
+    .legend {
+        background:#164e63; border:1px solid #0e7490; border-radius:10px;
+        padding:10px 12px; margin-bottom:14px; font-size:12px; color:#cffafe; line-height:1.5;
+    }
+    .legend b { color:#fde68a; }
+    .stats-bar {
+        display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;
+    }
+    .stat-pill {
+        background:#1e293b; border:1px solid #334155; border-radius:999px;
+        padding:5px 12px; font-size:12px; color:#94a3b8;
+    }
+    .stat-pill b { color:#22d3ee; }
+    .refresh { font-size:11px; color:#64748b; text-align:right; margin:4px 0 8px; }
+    .row {
+        background:#1e293b; border:1px solid #334155; border-radius:10px;
+        padding:10px 12px; margin-bottom:6px;
+        display:flex; align-items:center; gap:10px;
+    }
+    .row.top { border-color:#0e7490; background:#0c2233; }
+    .rank {
+        font-size:12px; font-weight:800; color:#64748b; min-width:24px; text-align:right;
+    }
+    .body { flex:1; min-width:0; }
+    .player { font-size:14px; font-weight:700; color:#e2e8f0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .meta { color:#94a3b8; font-size:11px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .edge { font-size:10px; color:#34d399; margin-left:4px; }
+    .prob {
+        font-size:17px; font-weight:800; color:#22d3ee;
+        font-variant-numeric:tabular-nums; min-width:52px; text-align:right;
+    }
+    .prob.high { color:#34d399; }
+    .prob.very-high { color:#fbbf24; }
+    .empty {
+        text-align:center; color:#94a3b8; padding:30px 12px;
+        background:#1e293b; border-radius:12px; border:1px dashed #334155;
+    }
+    .section-label {
+        font-size:11px; font-weight:700; color:#64748b; letter-spacing:.06em;
+        text-transform:uppercase; margin:14px 0 6px;
+    }
+</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/sleek.css') }}">
+</head>
+<body>
+<div class="container">
+    <div class="topnav">
+        <a href="/">← Slate</a>
+        <a href="/bases">💎 2-Base Board</a>
+        <a href="/hits-combos">🎯 Hits</a>
+    </div>
+
+    <h1>🔵 Ultimate Base Parlay</h1>
+    <p class="sub">Every player ≥ 65% to get 1+ base today — no cap</p>
+
+    <div class="legend">
+        <b>How it works:</b> Any hit = at least 1 base.
+        This page shows every hitter on today's full slate with a calibrated
+        ≥ 65% chance of going 1-for-whatever. No per-game limit — if 50 players
+        qualify, all 50 are listed. OVERs only. Stack your own parlay or use as
+        a quick confidence filter before first pitch.
+    </div>
+
+    <div class="stats-bar" id="stats-bar"></div>
+
+    <div class="refresh" id="refresh-status"></div>
+    <div id="rows"></div>
+</div>
+
+<script>
+const escape = (s) => String(s ?? "").replace(/[<>&"']/g, c => ({
+    "<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;","'":"&#39;"
+}[c]));
+
+function probClass(p) {
+    if (p >= 85) return "very-high";
+    if (p >= 75) return "high";
+    return "";
+}
+
+function render(rows, computing, ts, total) {
+    const bar = document.getElementById("stats-bar");
+    const status = document.getElementById("refresh-status");
+    const el = document.getElementById("rows");
+
+    // Stats bar
+    const p85 = rows.filter(r => r.probability >= 85).length;
+    const p75 = rows.filter(r => r.probability >= 75 && r.probability < 85).length;
+    const p65 = rows.filter(r => r.probability >= 65 && r.probability < 75).length;
+    bar.innerHTML = `
+        <div class="stat-pill">Total <b>${total}</b> players</div>
+        <div class="stat-pill">≥ 85% <b>${p85}</b></div>
+        <div class="stat-pill">75–84% <b>${p75}</b></div>
+        <div class="stat-pill">65–74% <b>${p65}</b></div>
+    `;
+
+    if (!rows.length) {
+        el.innerHTML = `<div class="empty">${computing ? "⏳ Slate still computing…" : "No players at ≥ 65% yet."}</div>`;
+        return;
+    }
+
+    let html = "";
+    let inSection = { 85: false, 75: false, 65: false };
+
+    rows.forEach((r, i) => {
+        const p = r.probability || 0;
+        if (p >= 85 && !inSection[85]) {
+            html += `<div class="section-label">🟡 85%+ locks</div>`;
+            inSection[85] = true;
+        } else if (p >= 75 && p < 85 && !inSection[75]) {
+            html += `<div class="section-label">🟢 75–84%</div>`;
+            inSection[75] = true;
+        } else if (p >= 65 && p < 75 && !inSection[65]) {
+            html += `<div class="section-label">🔵 65–74%</div>`;
+            inSection[65] = true;
+        }
+
+        const edge = r.market_edge_pct != null
+            ? `<span class="edge">+${Number(r.market_edge_pct).toFixed(1)}% edge</span>`
+            : "";
+        const proj = r.projection != null ? ` · proj ${Number(r.projection).toFixed(2)}` : "";
+
+        html += `
+        <div class="row${p >= 85 ? " top" : ""}">
+            <div class="rank">${i + 1}</div>
+            <div class="body">
+                <div class="player">${escape(r.player)}${edge}</div>
+                <div class="meta">${escape(r.matchup || "")}${proj}</div>
+            </div>
+            <div class="prob ${probClass(p)}">${p.toFixed(1)}%</div>
+        </div>`;
+    });
+
+    el.innerHTML = html;
+
+    if (computing) {
+        status.textContent = `⏳ Slate still computing… (${total} qualifying so far)`;
+    } else if (ts) {
+        const age = Math.round((Date.now() / 1000 - ts) / 60);
+        status.textContent = `${total} players · updated ${age}m ago`;
+    }
+}
+
+async function load() {
+    const status = document.getElementById("refresh-status");
+    try {
+        const res = await fetch("/api/one-base-board");
+        const data = await res.json();
+        render(data.rows || [], data.computing, data.ts, data.total_qualifying || 0);
+        if (data.computing) {
+            setTimeout(load, 15000);
+        }
+    } catch (e) {
+        status.textContent = `Error: ${e}`;
+    }
+}
+
+load();
+</script>
+</body>
+</html>
