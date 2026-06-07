@@ -52,6 +52,8 @@
         font-size:11px; font-weight:700; color:#64748b; letter-spacing:.06em;
         text-transform:uppercase; margin:14px 0 6px;
     }
+    .lineup-confirmed { color:#34d399; font-size:10px; font-weight:600; }
+    .lineup-projected { color:#f59e0b; font-size:10px; font-weight:500; }
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/sleek.css') }}">
 </head>
@@ -132,13 +134,16 @@ function render(rows, computing, ts, total) {
             ? `<span class="edge">+${Number(r.market_edge_pct).toFixed(1)}% edge</span>`
             : "";
         const proj = r.projection != null ? ` · proj ${Number(r.projection).toFixed(2)}` : "";
+        const lineupBadge = r.lineup_confirmed
+            ? `<span class="lineup-confirmed">✓ confirmed</span>`
+            : `<span class="lineup-projected">⏳ projected</span>`;
 
         html += `
         <div class="row${p >= 85 ? " top" : ""}">
             <div class="rank">${i + 1}</div>
             <div class="body">
                 <div class="player">${escape(r.player)}${edge}</div>
-                <div class="meta">${escape(r.matchup || "")}${proj}</div>
+                <div class="meta">${escape(r.matchup || "")}${proj} · ${lineupBadge}</div>
             </div>
             <div class="prob ${probClass(p)}">${p.toFixed(1)}%</div>
         </div>`;

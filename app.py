@@ -265,6 +265,25 @@ def build_game_boards(game):
 
     park_name = (weather or {}).get("park")
 
+    # Pre-fetch Vegas game total from live_odds (reads from 2hr disk cache —
+    # no extra HTTP hit). Split evenly between teams as the implied team total
+    # and pass to build_hitter_prop as a run-environment PA multiplier.
+    _implied_team_total = None
+    try:
+        from src import live_odds as _lo_early
+        if _lo_early.is_enabled():
+            _early_odds = _lo_early.fetch_game_odds()
+            if _early_odds:
+                _g_early = _lo_early.find_game(
+                    _early_odds, game.get("home_team"), game.get("away_team")
+                )
+                if _g_early:
+                    _t_early = _lo_early.best_total(_g_early, "Over")
+                    if _t_early and _t_early.get("point"):
+                        _implied_team_total = float(_t_early["point"]) / 2.0
+    except Exception:
+        pass
+
     def _hitter_props(hitters, opposing_pitcher_name, opposing_profile, side_score, opp_team_name=None):
         for idx, (_, hitter_name, hitter_profile) in enumerate(hitters):
             try:
@@ -292,6 +311,7 @@ def build_game_boards(game):
                         opp_pitcher_profile=opposing_profile,
                         park_name=park_name,
                         opp_team=opp_team_name,
+                        implied_team_total=_implied_team_total,
                     )
                     if prop["pick"] != "PASS":
                         bucket.append(prop)
@@ -531,6 +551,7 @@ def _build_plays_for_game(game):
                 "model_used": prop.get("model_used", False),
                 "matchup": matchup,
                 "game_pk": game.get("gamePk"),
+                "lineup_confirmed": boards.get("lineup_confirmed", False),
             })
 
     # 1+ H/R/RBI prop — kept OUT of this pipeline because hrr_combo plays

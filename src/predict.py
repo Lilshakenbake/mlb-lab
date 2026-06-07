@@ -485,6 +485,71 @@ def _pitcher_k_damper(stat_type, opp_pitcher_k_avg):
     return 1.0
 
 
+def _batter_contact_cross_factor(stat_type, contact_rate, pitcher_k_avg):
+    """Compound K-risk: low-contact batter vs high-K pitcher double-suppresses hits.
+
+    contact_rate = BBE/PA (balls in play per plate appearance).
+    League avg ~0.67. Below 0.60 = K-prone bat; above 0.75 = true contact bat.
+
+    The _pitcher_k_damper already penalises high-K starters in general.
+    This factor adds the BATTER side: a 25% K-rate hitter is hurt more
+    by a 10-K/9 ace than a 10% K-rate hitter facing the same pitcher.
+    Only applied to hits/total_bases — the props where a ball in play
+    is the prerequisite for production.
+    """
+    if stat_type not in ("hits", "total_bases"):
+        return 1.0
+    if contact_rate is None or pitcher_k_avg is None:
+        return 1.0
+    k = float(pitcher_k_avg)
+    cr = float(contact_rate)
+
+    if k >= 8.0:
+        # High-K pitcher: magnifies batter contact tendencies
+        if cr < 0.58:  return 0.92   # K-prone bat vs ace: double whammy
+        if cr < 0.65:  return 0.96   # below-avg contact vs ace
+        if cr > 0.78:  return 1.04   # contact bat somewhat insulated vs ace
+        return 1.0
+    if k <= 4.5:
+        # Soft-tossing pitcher: contact batters feast, K-prone still sting
+        if cr > 0.78:  return 1.06   # contact bat vs soft tosser: best case
+        if cr > 0.72:  return 1.03
+        if cr < 0.58:  return 0.96   # K-prone even struggles vs soft tosser
+        return 1.0
+    # Average pitcher (4.5–8 K/9): smaller marginal effect
+    if cr < 0.58:  return 0.97
+    if cr > 0.78:  return 1.02
+    return 1.0
+
+
+def _implied_total_factor(stat_type, implied_team_total):
+    """PA-opportunity multiplier from the Vegas game O/U line.
+
+    Higher game total → more expected offense → more plate appearances →
+    more hit opportunities per player. We split the game total in half
+    to get the implied TEAM total and adjust accordingly.
+
+    League avg implied team total ~4.25 (full game O/U ~8.5).
+    Applied to hits and, more gently, to total_bases.
+    """
+    if implied_team_total is None or stat_type not in ("hits", "total_bases"):
+        return 1.0
+    t = float(implied_team_total)
+    if stat_type == "hits":
+        if t >= 5.5:  return 1.05    # very high-scoring environment
+        if t >= 5.0:  return 1.03
+        if t <= 3.5:  return 0.95    # pitcher-dominated, fewer PAs
+        if t <= 4.0:  return 0.97
+        return 1.0
+    if stat_type == "total_bases":
+        if t >= 5.5:  return 1.04
+        if t >= 5.0:  return 1.02
+        if t <= 3.5:  return 0.96
+        if t <= 4.0:  return 0.98
+        return 1.0
+    return 1.0
+
+
 def _hot_factor(hot_ratio):
     """Tiny nudge for players riding a hot/cold streak (last 3 vs window)."""
     if hot_ratio is None:
@@ -845,7 +910,8 @@ def build_steal_prop(player_name, pitcher_name, line, sb_per_g,
 
 def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projection,
                       pitcher_hits_allowed, lineup_index, weather, hitter_profile=None,
-                      opp_pitcher_profile=None, park_name=None, opp_team=None):
+                      opp_pitcher_profile=None, park_name=None, opp_team=None,
+                      implied_team_total=None):
     lineup_boost = _lineup_boost(stat_type, lineup_index)
     weather_boost, weather_note = _weather_adjustment(stat_type, weather)
     pitcher_adjustment, matchup_note = _pitcher_adjustment(
@@ -970,7 +1036,23 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
             delta = pull_c - cf_c  # additional pull-side wind beyond CF
             pull_wind_bonus = delta * 0.010
 
-    context_factor = _clamp_factor(park_f * pitcher_k_f * platoon_f * hot_f * power_f * pen_f * fb_f * def_f)
+    # ── Batter contact × pitcher K cross-factor ─────────────────────────────
+    # Adds the BATTER side of the K-risk equation: a swing-and-miss bat is
+    # doubly hurt by an ace; a true contact bat is more insulated.
+    contact_cross_f = _batter_contact_cross_factor(
+        stat_type,
+        (hitter_profile or {}).get("contact_rate"),
+        k_avg,
+    )
+
+    # ── Vegas implied team total: run-environment PA multiplier ─────────────
+    # Higher O/U → more expected scoring → more plate appearances per player.
+    implied_total_f = _implied_total_factor(stat_type, implied_team_total)
+
+    context_factor = _clamp_factor(
+        park_f * pitcher_k_f * platoon_f * hot_f * power_f * pen_f * fb_f * def_f
+        * contact_cross_f * implied_total_f
+    )
 
     # Anti double-count: the K damper and the additive pitcher_adjustment both
     # encode pitcher quality. When the K damper has already pulled the projection
@@ -1002,6 +1084,10 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
         factor_bits.append(pen_note)
     if xstat_used:
         factor_bits.append("xStats")
+    if abs(contact_cross_f - 1.0) >= 0.03:
+        factor_bits.append(f"contact×K {contact_cross_f - 1:+.0%}")
+    if abs(implied_total_f - 1.0) >= 0.02:
+        factor_bits.append(f"O/U {implied_total_f - 1:+.0%}")
 
     # stricter penalties for weak starter profiles
     if stat_type == "hits" and base_projection < 0.70:
