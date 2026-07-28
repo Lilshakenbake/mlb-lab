@@ -121,14 +121,23 @@
 
     <div id="results"></div>
 
-    <!-- For external agents -->
+    <!-- For external agents (Raspberry Pi etc.) -->
     <div class="api-box">
-        <h3>🔗 For external agents / integrations</h3>
-        <p>Fetch all model data as JSON:</p>
+        <h3>🔗 Raspberry Pi / External Agent Access</h3>
+        <p>Set <code>AGENT_API_KEY</code> in Replit Secrets, then from your Pi:</p>
         <code>GET /api/agent-data</code>
-        <p style="margin-top:8px;">Post your own picks to this page via:</p>
+        <p style="margin-top:6px; font-size:11px; color:#64748b;">Header required:</p>
+        <code>Authorization: Bearer YOUR_AGENT_API_KEY</code>
+        <p style="margin-top:10px;">Post agent picks back here:</p>
         <code>POST /api/agent-predictions/submit</code>
-        <p style="margin-top:8px; font-size:11px; color:#475569;">Requires session auth. Pass <code>Authorization: Bearer &lt;token&gt;</code> header for programmatic access.</p>
+        <p style="margin-top:6px; font-size:11px; color:#64748b;">Body: <code>{"picks": [{"player":"...", "pick":"...", "reasoning":"..."}]}</code></p>
+        <div style="margin-top:10px; background:#060b1a; border-radius:6px; padding:10px; font-size:11px; color:#64748b; line-height:1.7;">
+            <strong style="color:#8b97bd;">Python example (for your Pi agent):</strong><br>
+            <code style="color:#38bdf8;">import requests</code><br>
+            <code style="color:#38bdf8;">r = requests.get("https://YOUR-APP.replit.app/api/agent-data",</code><br>
+            <code style="color:#38bdf8;">&nbsp;&nbsp;&nbsp;&nbsp;headers={"Authorization": "Bearer YOUR_KEY"})</code><br>
+            <code style="color:#38bdf8;">data = r.json()  # plays, hr_threats, nrfi, f5, locks</code>
+        </div>
     </div>
 
 </div>

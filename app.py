@@ -97,6 +97,29 @@ def login_required(f):
     return decorated_function
 
 
+# API key for programmatic / Raspberry Pi agent access.
+# Set AGENT_API_KEY env var to any secret string. Agents pass it as:
+#   Authorization: Bearer <key>
+# Falls back to session cookie so browser users are unaffected.
+AGENT_API_KEY = os.getenv("AGENT_API_KEY", "")
+
+def agent_or_login_required(f):
+    """Accept either a valid browser session OR a Bearer token API key."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Check bearer token first (for Raspberry Pi / external agents)
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and AGENT_API_KEY:
+            token = auth[len("Bearer "):]
+            if token == AGENT_API_KEY:
+                return f(*args, **kwargs)
+        # Fall back to session cookie (browser users)
+        if session.get("logged_in"):
+            return f(*args, **kwargs)
+        return jsonify({"error": "Unauthorized. Pass Authorization: Bearer <AGENT_API_KEY>"}), 401
+    return decorated_function
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
@@ -1279,7 +1302,7 @@ def agent_predictions_page():
 
 
 @app.route("/api/agent-data", methods=["GET"])
-@login_required
+@agent_or_login_required
 def api_agent_data():
     """Full data snapshot for external agents — plays, HR threats, NRFI, F5, locks, HRR combos."""
     _ensure_plays_refresh()
@@ -1306,7 +1329,7 @@ def api_agent_data():
 
 
 @app.route("/api/agent-predictions/generate", methods=["POST"])
-@login_required
+@agent_or_login_required
 def api_agent_predictions_generate():
     """Run GPT-4o over tonight's full data set and return structured picks."""
     import json as _json
@@ -1411,7 +1434,7 @@ def api_agent_predictions_generate():
 
 
 @app.route("/api/agent-predictions/submit", methods=["POST"])
-@login_required
+@agent_or_login_required
 def api_agent_predictions_submit():
     """External agents can POST their own picks here for display."""
     data = request.get_json(silent=True) or {}
