@@ -3064,26 +3064,49 @@ def _run_daily_agent_job():
     print(f"[agent-scheduler] saved picks — result: {saved}")
 
 
+def _today_picks_already_saved() -> bool:
+    """Return True if the internal bot has already posted picks for today."""
+    try:
+        today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        existing = tracker.list_agent_picks(game_date=today)
+        return any(p.get("agent_name") == "Baked After Dark Bot" for p in existing)
+    except Exception:
+        return False
+
+
 def _daily_agent_scheduler_loop():
-    """Daemon thread: wait until noon ET, run the analysis, then sleep 24 h and repeat."""
-    # Delay first run until the cache has had time to warm on boot.
+    """Daemon thread: run analysis at noon ET daily.
+
+    On first boot, if today's picks haven't been saved yet (missed noon window
+    or fresh install), run immediately after the cache warms instead of waiting
+    until tomorrow's noon.
+    """
+    # Give the cache time to warm before the first analysis.
     time.sleep(90)
 
+    first_run = True
     while True:
         now_utc   = datetime.datetime.utcnow()
-        # Eastern Time is UTC-4 during EDT (summer) and UTC-5 during EST.
-        # MLB season runs Apr-Oct (EDT), so UTC-4 is correct for the season.
+        # Eastern Time is UTC-4 during EDT (summer). MLB season is Apr-Oct.
         et_offset = datetime.timedelta(hours=4)
         now_et    = now_utc - et_offset
 
         target_hour = 12  # noon ET
         next_run_et = now_et.replace(hour=target_hour, minute=0, second=0, microsecond=0)
         if now_et >= next_run_et:
-            # Already past noon today — aim for noon tomorrow.
             next_run_et += datetime.timedelta(days=1)
 
+        # On the very first loop, run immediately if today's picks are missing.
+        if first_run and not _today_picks_already_saved():
+            print("[agent-scheduler] no picks for today yet — running now")
+            try:
+                _run_daily_agent_job()
+            except Exception as e:
+                print(f"[agent-scheduler] immediate job error: {e}")
+            first_run = False
+
         wait_seconds = (next_run_et - now_et).total_seconds()
-        print(f"[agent-scheduler] next run in {wait_seconds / 3600:.1f} h "
+        print(f"[agent-scheduler] next scheduled run in {wait_seconds / 3600:.1f} h "
               f"(~{next_run_et.strftime('%Y-%m-%d %H:%M')} ET)")
         time.sleep(wait_seconds)
 
@@ -3091,6 +3114,7 @@ def _daily_agent_scheduler_loop():
             _run_daily_agent_job()
         except Exception as e:
             print(f"[agent-scheduler] job error: {e}")
+        first_run = False
 
         # Sleep 23 h to avoid drifting past the next noon window.
         time.sleep(23 * 3600)
