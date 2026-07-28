@@ -7,7 +7,7 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            background: #0f172a;
+            background: #0d0b08;
             color: #e2e8f0;
             margin: 0;
             padding: 0;
@@ -212,7 +212,7 @@
                 {% if v >= 15 %}{% set color = "#22c55e" %}{% set lbl = "ELITE" %}
                 {% elif v >= 10 %}{% set color = "#84cc16" %}{% set lbl = "STRONG" %}
                 {% elif v >= 5 %}{% set color = "#eab308" %}{% set lbl = "DECENT" %}
-                {% else %}{% set color = "#64748b" %}{% set lbl = "THIN" %}
+                {% else %}{% set color = "#6b6560" %}{% set lbl = "THIN" %}
                 {% endif %}
                 {% set pct = [[v * 5, 8]|max, 100]|min %}
                 <div style="margin-top:6px;">

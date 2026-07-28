@@ -7,7 +7,7 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            background: #0f172a;
+            background: #0d0b08;
             color: #e2e8f0;
             margin: 0;
             padding: 0;
@@ -258,9 +258,9 @@
 <div class="container">
 
     <!-- Brand header -->
-    <div style="text-align:center; padding:14px 0 10px; border-bottom:1px solid #283253; margin-bottom:12px;">
-        <div style="font-size:20px; font-weight:800; letter-spacing:.04em; color:#e8edff;">Baked After Dark</div>
-        <div style="font-size:11px; color:#38bdf8; letter-spacing:.14em; text-transform:uppercase; font-weight:600; margin-top:3px;">⚾ Sports Analytics</div>
+    <div style="text-align:center; padding:14px 0 10px; border-bottom:1px solid #2a2218; margin-bottom:12px;">
+        <div style="font-size:20px; font-weight:800; letter-spacing:.04em; color:#f0ede8;">Baked After Dark</div>
+        <div style="font-size:11px; color:#e8a020; letter-spacing:.14em; text-transform:uppercase; font-weight:600; margin-top:3px;">⚾ Sports Analytics</div>
     </div>
 
     <div style="display:flex; gap:14px; margin-bottom:8px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:4px; white-space:nowrap;">
@@ -416,7 +416,7 @@ window.__edgeBar = function (edge) {
     if (v >= 15)      { color = "#22c55e"; label = "ELITE"; }
     else if (v >= 10) { color = "#84cc16"; label = "STRONG"; }
     else if (v >= 5)  { color = "#eab308"; label = "DECENT"; }
-    else              { color = "#64748b"; label = "THIN"; }
+    else              { color = "#6b6560"; label = "THIN"; }
     const pct = Math.min(100, Math.max(8, v * 5));
     return `
         <div style="margin-top:6px;">
@@ -957,7 +957,7 @@ window.__aiPill = function (r) {
             : "";
         const aiBit = window.__aiPill ? window.__aiPill(c.ai_review) : "";
         return `
-            <div class="card play-card" style="border-left:4px solid #38bdf8;">
+            <div class="card play-card" style="border-left:4px solid #e8a020;">
               <a href="${link}" style="text-decoration:none; color:inherit;">
                 <div>
                   <div class="matchup">${escape(c.player)}</div>

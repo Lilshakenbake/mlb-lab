@@ -5,30 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Predictions · Baked After Dark Sports</title>
 <style>
-    body { background:#060b1a; color:#e8edff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; margin:0; padding:0; }
+    body { background:#080604; color:#f0ede8; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; margin:0; padding:0; }
     .container { max-width:720px; margin:0 auto; padding:16px; }
 
     .topnav { display:flex; gap:14px; margin-bottom:12px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:4px; white-space:nowrap; }
     .topnav a { color:#93c5fd; text-decoration:none; font-weight:600; font-size:13px; flex-shrink:0; }
-    .topnav a:first-child { color:#38bdf8; }
+    .topnav a:first-child { color:#e8a020; }
 
     .brand-bar {
         text-align:center; padding:14px 0 10px;
-        border-bottom:1px solid #283253; margin-bottom:14px;
+        border-bottom:1px solid #2a2218; margin-bottom:14px;
     }
     .brand-bar .name { font-size:20px; font-weight:800; letter-spacing:.04em; }
-    .brand-bar .sub { font-size:11px; color:#38bdf8; letter-spacing:.14em; text-transform:uppercase; font-weight:600; margin-top:3px; }
+    .brand-bar .sub { font-size:11px; color:#e8a020; letter-spacing:.14em; text-transform:uppercase; font-weight:600; margin-top:3px; }
 
     h1 { font-size:22px; font-weight:800; margin:0 0 4px; }
-    .page-sub { color:#8b97bd; font-size:13px; margin:0 0 20px; }
+    .page-sub { color:#8a8076; font-size:13px; margin:0 0 20px; }
 
     /* Data summary strip */
     .data-strip { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px; }
     .data-chip {
-        background:#131a2e; border:1px solid #283253; border-radius:8px;
-        padding:8px 14px; font-size:12px; color:#8b97bd;
+        background:#141210; border:1px solid #2a2218; border-radius:8px;
+        padding:8px 14px; font-size:12px; color:#8a8076;
     }
-    .data-chip span { color:#e8edff; font-weight:700; font-size:15px; display:block; }
+    .data-chip span { color:#f0ede8; font-weight:700; font-size:15px; display:block; }
 
     /* Generate button */
     .gen-btn {
@@ -42,13 +42,13 @@
     .gen-btn:disabled { opacity:.45; cursor:not-allowed; }
 
     /* Status / spinner */
-    #status { text-align:center; color:#8b97bd; font-size:13px; margin:-16px 0 18px; min-height:18px; }
+    #status { text-align:center; color:#8a8076; font-size:13px; margin:-16px 0 18px; min-height:18px; }
 
     /* Pick cards */
-    .section-hd { font-size:11px; font-weight:700; color:#64748b; letter-spacing:.08em; text-transform:uppercase; margin:20px 0 8px; }
+    .section-hd { font-size:11px; font-weight:700; color:#6b6560; letter-spacing:.08em; text-transform:uppercase; margin:20px 0 8px; }
 
     .pick-card {
-        background:#131a2e; border:1px solid #283253; border-radius:12px;
+        background:#141210; border:1px solid #2a2218; border-radius:12px;
         padding:14px 16px; margin-bottom:10px;
         display:flex; align-items:flex-start; gap:14px;
     }
@@ -61,10 +61,10 @@
         min-width:28px; text-align:center; padding-top:2px;
     }
     .pick-body { flex:1; min-width:0; }
-    .pick-player { font-size:15px; font-weight:700; color:#e8edff; }
-    .pick-line { font-size:13px; color:#38bdf8; font-weight:600; margin:2px 0; }
+    .pick-player { font-size:15px; font-weight:700; color:#f0ede8; }
+    .pick-line { font-size:13px; color:#e8a020; font-weight:600; margin:2px 0; }
     .pick-mvmarket { font-size:11px; color:#a78bfa; margin:3px 0; font-style:italic; }
-    .pick-reason { font-size:12px; color:#8b97bd; line-height:1.5; }
+    .pick-reason { font-size:12px; color:#8a8076; line-height:1.5; }
     .pick-conf {
         font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px;
         white-space:nowrap; margin-top:6px; display:inline-block;
@@ -75,19 +75,19 @@
 
     /* Analysis block */
     .analysis-card {
-        background:#0e1628; border:1px solid #283253; border-radius:12px;
+        background:#111009; border:1px solid #2a2218; border-radius:12px;
         padding:16px; margin-bottom:10px; font-size:13px; line-height:1.7; color:#cbd5e1;
     }
     .analysis-card h3 { font-size:13px; font-weight:700; color:#a78bfa; margin:0 0 8px; }
 
     /* API info */
     .api-box {
-        background:#0a1124; border:1px solid #283253; border-radius:10px;
+        background:#0e0c09; border:1px solid #2a2218; border-radius:10px;
         padding:14px 16px; margin-top:24px;
     }
-    .api-box h3 { font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.08em; margin:0 0 8px; }
-    .api-box code { font-size:12px; color:#38bdf8; word-break:break-all; }
-    .api-box p { font-size:12px; color:#8b97bd; margin:6px 0 0; }
+    .api-box h3 { font-size:12px; font-weight:700; color:#6b6560; text-transform:uppercase; letter-spacing:.08em; margin:0 0 8px; }
+    .api-box code { font-size:12px; color:#e8a020; word-break:break-all; }
+    .api-box p { font-size:12px; color:#8a8076; margin:6px 0 0; }
 
     .empty { color:#475569; text-align:center; padding:40px 0; font-size:14px; }
 
@@ -99,10 +99,10 @@
     }
     .ext-agent-header h2 { font-size:16px; font-weight:800; margin:0; }
     .ext-agent-header .refresh-btn {
-        background:none; border:1px solid #283253; color:#8b97bd;
+        background:none; border:1px solid #2a2218; color:#8a8076;
         border-radius:8px; padding:4px 10px; font-size:11px; cursor:pointer;
     }
-    .ext-agent-header .refresh-btn:hover { border-color:#38bdf8; color:#38bdf8; }
+    .ext-agent-header .refresh-btn:hover { border-color:#e8a020; color:#e8a020; }
 
     .agent-block { margin-bottom:20px; }
     .agent-block-header {
@@ -114,7 +114,7 @@
         padding:4px 12px; font-size:12px; font-weight:700; color:#a78bfa;
     }
     .agent-meta { font-size:11px; color:#475569; }
-    .agent-meta a { color:#38bdf8; text-decoration:none; }
+    .agent-meta a { color:#e8a020; text-decoration:none; }
     .agent-meta a:hover { text-decoration:underline; }
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/sleek.css') }}">
@@ -169,12 +169,12 @@
         <p style="margin-top:8px;">View submitted picks:</p>
         <code>GET /api/agent-predictions/picks</code>
         <p style="margin-top:8px; font-size:11px; color:#475569;">Submit body: <code>{"agent_name":"MyAgent","agent_source":"https://...","picks":[...]}</code></p>
-        <div style="margin-top:10px; background:#060b1a; border-radius:6px; padding:10px; font-size:11px; color:#64748b; line-height:1.7;">
-            <strong style="color:#8b97bd;">Python example:</strong><br>
-            <code style="color:#38bdf8;">import requests</code><br>
-            <code style="color:#38bdf8;">r = requests.get("https://YOUR-APP.replit.app/api/agent-data",</code><br>
-            <code style="color:#38bdf8;">&nbsp;&nbsp;&nbsp;&nbsp;headers={"Authorization": "Bearer YOUR_AGENT_API_TOKEN"})</code><br>
-            <code style="color:#38bdf8;">data = r.json()  # plays, hr_threats, nrfi, f5, locks</code>
+        <div style="margin-top:10px; background:#080604; border-radius:6px; padding:10px; font-size:11px; color:#6b6560; line-height:1.7;">
+            <strong style="color:#8a8076;">Python example:</strong><br>
+            <code style="color:#e8a020;">import requests</code><br>
+            <code style="color:#e8a020;">r = requests.get("https://YOUR-APP.replit.app/api/agent-data",</code><br>
+            <code style="color:#e8a020;">&nbsp;&nbsp;&nbsp;&nbsp;headers={"Authorization": "Bearer YOUR_AGENT_API_TOKEN"})</code><br>
+            <code style="color:#e8a020;">data = r.json()  # plays, hr_threats, nrfi, f5, locks</code>
         </div>
     </div>
 
@@ -298,11 +298,11 @@ function renderResults(d) {
             html += `<div style="padding:4px 0; border-bottom:1px solid #1e2d4a;">
                 <span style="color:#f472b6; font-weight:700;">#${i+1}</span>
                 <span style="margin-left:8px; font-weight:600;">${esc(l.player)}</span>
-                <span style="color:#38bdf8; margin-left:8px;">${esc(l.pick)}</span>
+                <span style="color:#e8a020; margin-left:8px;">${esc(l.pick)}</span>
             </div>`;
         });
         if (d.best_parlay.reasoning) {
-            html += `<div style="margin-top:10px; color:#8b97bd; font-size:12px;">${esc(d.best_parlay.reasoning)}</div>`;
+            html += `<div style="margin-top:10px; color:#8a8076; font-size:12px;">${esc(d.best_parlay.reasoning)}</div>`;
         }
         html += '</div>';
     }

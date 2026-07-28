@@ -1146,7 +1146,7 @@ def build_hitter_prop(stat_type, player_name, pitcher_name, line, base_projectio
     # in the solver (×0.92 on 65-80 band hitter props). True 88-92% picks
     # need to flow through so safe-style parlays don't artificially need
     # more legs. Floor at 22% keeps fade-the-trash side honest.
-    probability = max(min(probability, 92.0), 22.0)
+    probability = max(min(probability, 97.0), 8.0)
 
     note_parts = [matchup_note, weather_note]
     if factor_bits:
@@ -1207,7 +1207,7 @@ def build_pitcher_k_prop(pitcher_name, line, projection, weather, pitcher_profil
         probability = edge_to_probability("pitcher_strikeouts", edge)
 
     # Confidence cap — same reasoning as hitter props (raised 78→92).
-    probability = max(min(probability, 92.0), 22.0)
+    probability = max(min(probability, 97.0), 8.0)
 
     return {
         "pitcher": pitcher_name,

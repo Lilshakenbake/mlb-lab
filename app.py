@@ -52,8 +52,8 @@ RAW_HR_THREATS_CACHE = {"ts": 0, "data": []}
 RAW_HRR_COMBO_CACHE = {"ts": 0, "data": []}
 PLAYS_CACHE_TTL_SECONDS = int(os.getenv("PLAYS_CACHE_TTL", "600"))  # 10 min default
 PLAYS_GAME_CONCURRENCY = int(os.getenv("PLAYS_GAME_CONCURRENCY", "2"))
-PLAYS_LIMIT = int(os.getenv("PLAYS_LIMIT", "20"))
-PLAYS_PER_GAME_CAP = int(os.getenv("PLAYS_PER_GAME_CAP", "3"))
+PLAYS_LIMIT = int(os.getenv("PLAYS_LIMIT", "40"))
+PLAYS_PER_GAME_CAP = int(os.getenv("PLAYS_PER_GAME_CAP", "6"))
 BOARD_INNER_CONCURRENCY = int(os.getenv("BOARD_INNER_CONCURRENCY", "3"))
 _PLAYS_LOCK = threading.Lock()
 
@@ -70,14 +70,14 @@ SPECIALS_CACHE = {"ts": 0, "data": {
     "hr_pair": None,
     "bases_parlay": None,
 }}
-HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "20"))
+HR_THREATS_LIMIT = int(os.getenv("HR_THREATS_LIMIT", "35"))
 HR_THREATS_PER_GAME_CAP = int(os.getenv("HR_THREATS_PER_GAME_CAP", "2"))
 HRR_COMBO_CACHE = {"ts": 0, "data": []}
-HRR_COMBO_LIMIT = int(os.getenv("HRR_COMBO_LIMIT", "12"))
+HRR_COMBO_LIMIT = int(os.getenv("HRR_COMBO_LIMIT", "20"))
 # Locks: top N highest-probability single plays across the WHOLE slate,
 # uncapped by per-game diversification. Used by the hero strip.
 LOCKS_CACHE = {"ts": 0, "data": []}
-LOCKS_LIMIT = int(os.getenv("LOCKS_LIMIT", "3"))
+LOCKS_LIMIT = int(os.getenv("LOCKS_LIMIT", "8"))
 
 STAT_LABELS = {
     "hits": "Hits",
@@ -1390,9 +1390,11 @@ def api_agent_predictions_generate():
 
     def _nrfi_summary(n):
         return {
-            "game":      f"{n.get('away_team')} @ {n.get('home_team')}",
-            "nrfi_prob": round(n.get("probability", 0), 1),
-            "lean":      n.get("lean"),
+            "game":        n.get("matchup") or f"{n.get('away_team','?')} @ {n.get('home_team','?')}",
+            "nrfi_prob":   round(n.get("probability", 0), 1),
+            "lean":        n.get("pick") or n.get("lean"),
+            "away_pitcher":n.get("away_pitcher"),
+            "home_pitcher":n.get("home_pitcher"),
         }
 
     def _f5_summary(g):
@@ -3008,9 +3010,11 @@ def _run_agent_analysis() -> dict | None:
 
     def _nrfi_summary(n):
         return {
-            "game":      f"{n.get('away_team')} @ {n.get('home_team')}",
-            "nrfi_prob": round(n.get("probability", 0), 1),
-            "lean":      n.get("lean"),
+            "game":        n.get("matchup") or f"{n.get('away_team','?')} @ {n.get('home_team','?')}",
+            "nrfi_prob":   round(n.get("probability", 0), 1),
+            "lean":        n.get("pick") or n.get("lean"),
+            "away_pitcher":n.get("away_pitcher"),
+            "home_pitcher":n.get("home_pitcher"),
         }
 
     def _f5_summary(g):

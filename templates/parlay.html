@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Parlay Grader · Baked After Dark Sports</title>
 <style>
-    body { background:#0f172a; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:0; }
+    body { background:#0d0b08; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:0; }
     .container { max-width:780px; margin:0 auto; padding:18px 14px 80px; }
     h1 { font-size:22px; margin:6px 0 2px; }
     .sub { color:#94a3b8; font-size:13px; margin:0 0 16px; }
@@ -14,7 +14,7 @@
     .card { background:#1e293b; border:1px solid #334155; border-radius:10px; padding:12px; margin-bottom:10px; }
     .leg-row { display:flex; gap:6px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
     .leg-row input, .leg-row select {
-        background:#0f172a; color:#e2e8f0; border:1px solid #334155;
+        background:#0d0b08; color:#e2e8f0; border:1px solid #334155;
         border-radius:6px; padding:7px 8px; font-size:13px; flex:1; min-width:0;
     }
     .leg-row .player { flex:2; min-width:130px; }
@@ -45,12 +45,12 @@
     .verdict-LEAN  { background:#3f3f0d; color:#fde68a; }
     .verdict-PASS  { background:#451a03; color:#fdba74; }
     .verdict-FADE  { background:#4c0519; color:#fda4af; }
-    .leg-note { font-size:12px; color:#cbd5e1; padding:6px 8px; border-left:3px solid #475569; margin:6px 0; background:#0f172a; border-radius:4px; }
+    .leg-note { font-size:12px; color:#cbd5e1; padding:6px 8px; border-left:3px solid #475569; margin:6px 0; background:#0d0b08; border-radius:4px; }
     .picker-row { display:flex; gap:6px; margin-bottom:6px; }
-    .picker-row select { flex:1; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:7px 8px; font-size:13px; }
+    .picker-row select { flex:1; background:#0d0b08; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:7px 8px; font-size:13px; }
     .summary { font-size:14px; color:#e2e8f0; margin:8px 0; line-height:1.4; }
     .stat-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0; }
-    .stat-box { background:#0f172a; padding:10px; border-radius:8px; text-align:center; border:1px solid #334155; }
+    .stat-box { background:#0d0b08; padding:10px; border-radius:8px; text-align:center; border:1px solid #334155; }
     .stat-box .label { font-size:10px; color:#94a3b8; letter-spacing:0.5px; }
     .stat-box .val { font-size:20px; font-weight:700; margin-top:2px; }
     ul.bullets { margin:4px 0 8px 18px; padding:0; font-size:13px; color:#cbd5e1; }
@@ -87,7 +87,7 @@
             <select id="picker"><option value="">— Pick a play to add —</option></select>
             <button class="btn secondary" style="width:auto; margin:0; padding:7px 12px;" onclick="addFromPicker()">+ Add</button>
         </div>
-        <div style="font-size:11px; color:#64748b;">Or add a leg manually below.</div>
+        <div style="font-size:11px; color:#6b6560;">Or add a leg manually below.</div>
     </div>
 
     <div class="card">
@@ -129,7 +129,7 @@ const esc = (s) => String(s == null ? "" : s)
 function renderLegs() {
     const wrap = document.getElementById("legs");
     if (legs.length === 0) {
-        wrap.innerHTML = '<div style="color:#64748b; font-size:13px; padding:8px 0;">No legs yet — add from picker above or click "+ Add blank leg".</div>';
+        wrap.innerHTML = '<div style="color:#6b6560; font-size:13px; padding:8px 0;">No legs yet — add from picker above or click "+ Add blank leg".</div>';
         return;
     }
     wrap.innerHTML = legs.map((L, i) => `
@@ -149,7 +149,7 @@ function renderLegs() {
                    oninput="updateLeg(${i},'probability',this.value)">
             <button class="rm" onclick="removeLeg(${i})">✕</button>
         </div>
-        ${L.matchup ? `<div style="font-size:10px; color:#64748b; margin:-4px 0 6px 4px;">${esc(L.matchup)}</div>` : ''}
+        ${L.matchup ? `<div style="font-size:10px; color:#6b6560; margin:-4px 0 6px 4px;">${esc(L.matchup)}</div>` : ''}
     `).join("");
 }
 
@@ -245,12 +245,12 @@ function renderResult(d) {
         const L = legs[i-1];
         const head = L ? `${esc(L.player)} · ${esc(L.stat)} ${esc(L.pick||"")} ${L.line ?? ""}` : `Leg ${n.i}`;
         return `<div class="leg-note"><strong>#${n.i}</strong> ${head}<br>${esc(n.note || "")}</div>`;
-    }).join("") || '<div style="color:#64748b; font-size:12px;">No per-leg notes.</div>';
+    }).join("") || '<div style="color:#6b6560; font-size:12px;">No per-leg notes.</div>';
 
     document.getElementById("risks").innerHTML =
-        (d.risks||[]).map(r => `<li>${esc(r)}</li>`).join("") || '<li style="color:#64748b;">No notable risks called out.</li>';
+        (d.risks||[]).map(r => `<li>${esc(r)}</li>`).join("") || '<li style="color:#6b6560;">No notable risks called out.</li>';
     document.getElementById("suggestions").innerHTML =
-        (d.suggestions||[]).map(s => `<li>${esc(s)}</li>`).join("") || '<li style="color:#64748b;">No specific suggestions.</li>';
+        (d.suggestions||[]).map(s => `<li>${esc(s)}</li>`).join("") || '<li style="color:#6b6560;">No specific suggestions.</li>';
 
     box.style.display = "block";
     box.scrollIntoView({behavior:"smooth", block:"start"});

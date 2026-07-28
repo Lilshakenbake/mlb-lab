@@ -7,12 +7,12 @@
 <style>
     :root {
         --bg: #0a0f1e;
-        --panel: #131a2e;
-        --panel-2: #1a2340;
-        --border: #283253;
+        --panel: #141210;
+        --panel-2: #1c1914;
+        --border: #2a2218;
         --text: #e6ecff;
         --muted: #8593b8;
-        --accent: #38bdf8;
+        --accent: #e8a020;
         --good: #34d399;
         --gold: #fbbf24;
         --purple: #a78bfa;
@@ -58,9 +58,9 @@
         background: transparent; border: none;
     }
     .mode-tab.active {
-        background: linear-gradient(135deg, var(--accent), #0ea5e9);
-        color: #04101f;
-        box-shadow: 0 2px 8px rgba(56, 189, 248, 0.3);
+        background: linear-gradient(135deg, var(--accent), #d4920a);
+        color: #0a0804;
+        box-shadow: 0 2px 8px rgba(232, 160, 32, 0.3);
     }
     .difficulty {
         display: inline-block; padding: 3px 9px; border-radius: 999px;
@@ -104,11 +104,11 @@
     .preset:hover { background: var(--border); border-color: var(--accent); }
 
     .btn {
-        background: linear-gradient(135deg, var(--accent), #0ea5e9);
-        color: #04101f; border: none; border-radius: 12px;
+        background: linear-gradient(135deg, var(--accent), #d4920a);
+        color: #0a0804; border: none; border-radius: 12px;
         padding: 14px; font-weight: 800; font-size: 15px;
         cursor: pointer; width: 100%; letter-spacing: 0.3px;
-        box-shadow: 0 4px 14px rgba(56, 189, 248, 0.3);
+        box-shadow: 0 4px 14px rgba(232, 160, 32, 0.3);
     }
     .btn:hover { filter: brightness(1.1); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
@@ -116,7 +116,7 @@
         background: transparent; color: var(--accent);
         border: 1px solid var(--border); box-shadow: none;
     }
-    .btn.win { background: linear-gradient(135deg, var(--good), #059669); color: #04101f; }
+    .btn.win { background: linear-gradient(135deg, var(--good), #059669); color: #0a0804; }
     .btn.loss { background: linear-gradient(135deg, var(--danger), #be123c); color: white; }
 
     /* Ladder visual */
@@ -133,7 +133,7 @@
     .rung.done { background: rgba(52, 211, 153, 0.15);
         border-color: var(--good); color: var(--good); }
     .rung.current { background: linear-gradient(135deg, var(--gold), #f59e0b);
-        border-color: var(--gold); color: #04101f;
+        border-color: var(--gold); color: #0a0804;
         box-shadow: 0 4px 14px rgba(251, 191, 36, 0.35); }
     .rung .arrow { color: var(--muted); font-size: 12px; }
 

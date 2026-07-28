@@ -1,46 +1,63 @@
-/* Baked After Dark Sports — sleek design system.
-   Loaded AFTER each page's inline <style> so these tokens win.
-   Per-page rules can still override anything below. */
+/* Baked After Dark Sports — warm cinematic design system.
+   Inspired by bakedafterdark.com: near-black backgrounds, amber-gold accents,
+   premium studio aesthetic. Loaded AFTER each page's inline <style>. */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
 :root {
-    --bg: #060b1a;
-    --bg-2: #0a1124;
-    --panel: #131a2e;
-    --panel-2: #1a2340;
-    --border: #283253;
-    --border-hi: #3a4778;
-    --text: #e8edff;
-    --muted: #8b97bd;
-    --accent: #38bdf8;
-    --accent-2: #818cf8;
-    --good: #34d399;
-    --gold: #fbbf24;
-    --purple: #a78bfa;
-    --danger: #fb7185;
-    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.25);
-    --shadow-md: 0 6px 22px rgba(0, 0, 0, 0.35);
-    --shadow-glow: 0 0 0 1px rgba(56, 189, 248, 0.18), 0 8px 28px rgba(56, 189, 248, 0.08);
+    /* Core palette — warm dark studio */
+    --bg:         #080604;
+    --bg-2:       #0e0c09;
+    --panel:      #141210;
+    --panel-2:    #1c1914;
+    --border:     #2a2218;
+    --border-hi:  #3d3224;
+
+    /* Typography */
+    --text:       #f0ede8;
+    --muted:      #8a8076;
+    --muted-2:    #5a5550;
+
+    /* Accents */
+    --accent:     #e8a020;   /* amber gold — primary CTA */
+    --accent-dim: #b87d18;   /* darker amber for hover */
+    --accent-2:   #c084fc;   /* purple for AI/agent sections */
+    --good:       #34d399;   /* emerald green — positive */
+    --gold:       #f59e0b;   /* warm gold for elite tier */
+    --orange:     #f97316;   /* hot/fire picks */
+    --purple:     #a78bfa;
+    --danger:     #fb7185;
+
+    /* Shadows */
+    --shadow-sm:   0 2px 8px rgba(0,0,0,0.5);
+    --shadow-md:   0 6px 24px rgba(0,0,0,0.6);
+    --shadow-glow: 0 0 0 1px rgba(232,160,32,0.15), 0 8px 28px rgba(232,160,32,0.07);
 }
 
 * { box-sizing: border-box; }
 
 html, body {
-    background: radial-gradient(1200px 600px at 50% -120px, #1a2340 0%, transparent 60%), linear-gradient(180deg, #060b1a 0%, #0a1124 100%) !important;
+    background: radial-gradient(1400px 500px at 50% -100px, #1e1508 0%, transparent 65%),
+                linear-gradient(180deg, #080604 0%, #0a0805 100%) !important;
     color: var(--text) !important;
-    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
 
-/* Headings */
-h1 { font-size: 26px !important; letter-spacing: -0.5px; font-weight: 800; }
-h2 { letter-spacing: -0.3px; font-weight: 700; }
-h3 { letter-spacing: -0.2px; font-weight: 700; }
-
+/* ── Typography ── */
+h1 { font-size: 26px !important; letter-spacing: -0.6px; font-weight: 800; color: var(--text) !important; }
+h2 { letter-spacing: -0.4px; font-weight: 700; }
+h3 { letter-spacing: -0.2px; font-weight: 600; }
 .sub { color: var(--muted) !important; }
 
-/* Cards everywhere */
+/* Brand sub-label gets accent treatment */
+.brand-bar .sub,
+[style*="color:#38bdf8"],
+.accent-label { color: var(--accent) !important; }
+
+/* ── Cards ── */
 .card,
 .stat-card,
 .combo-card,
@@ -58,22 +75,22 @@ h3 { letter-spacing: -0.2px; font-weight: 700; }
 .card:hover,
 .combo-card:hover,
 .stat-card:hover {
-    transform: translateY(-1px);
+    transform: translateY(-2px);
     box-shadow: var(--shadow-md);
     border-color: var(--border-hi) !important;
 }
 
-/* Hero/lock band */
+/* ── Hero / lock band ── */
 .hero-locks {
-    background: linear-gradient(135deg, #0f3a3a 0%, #1e1b4b 100%) !important;
-    border: 1px solid #2dd4bf33 !important;
+    background: linear-gradient(135deg, #1a1000 0%, #0f0e1e 100%) !important;
+    border: 1px solid rgba(232,160,32,0.18) !important;
     border-radius: 16px;
     padding: 16px;
     margin-bottom: 18px;
     box-shadow: var(--shadow-md);
 }
 
-/* Nav pills (used on index) */
+/* ── Nav pills ── */
 .nav-pills a,
 .topnav a {
     background: var(--panel-2) !important;
@@ -92,33 +109,34 @@ h3 { letter-spacing: -0.2px; font-weight: 700; }
     color: var(--accent) !important;
 }
 
-/* Sticky bottom nav on index keeps glassy feel */
+/* ── Sticky bottom nav ── */
 .bottom-nav,
 .nav-pills.sticky,
 .sticky-nav {
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    background: rgba(10, 17, 36, 0.85) !important;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    background: rgba(8,6,4,0.88) !important;
     border-top: 1px solid var(--border) !important;
 }
 
-/* Buttons */
+/* ── Buttons ── */
 a.button-link,
 .btn,
 button.btn {
-    background: linear-gradient(135deg, var(--accent), #0ea5e9) !important;
-    color: #04101f !important;
+    background: linear-gradient(135deg, var(--accent), var(--accent-dim)) !important;
+    color: #0a0804 !important;
     border: none !important;
     border-radius: 12px !important;
     font-weight: 800 !important;
     letter-spacing: 0.2px;
-    box-shadow: 0 4px 14px rgba(56, 189, 248, 0.25);
+    box-shadow: 0 4px 16px rgba(232,160,32,0.28);
     transition: filter 0.15s ease, transform 0.05s ease;
 }
 a.button-link:hover,
-.btn:hover { filter: brightness(1.1); }
+.btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
 a.button-link:active,
 .btn:active { transform: translateY(1px); }
+
 .btn.secondary {
     background: var(--panel-2) !important;
     color: var(--text) !important;
@@ -127,11 +145,33 @@ a.button-link:active,
 .btn.ghost {
     background: transparent !important;
     color: var(--accent) !important;
-    border: 1px solid var(--border) !important;
+    border: 1px solid var(--border-hi) !important;
     box-shadow: none;
 }
+.btn.ghost:hover {
+    border-color: var(--accent) !important;
+    background: rgba(232,160,32,0.08) !important;
+}
 
-/* Inputs */
+/* Track / Parlay action buttons get inline amber style */
+button[onclick*="track"],
+button[onclick*="Track"],
+button[onclick*="parlay"],
+button[onclick*="Parlay"] {
+    border-color: var(--border-hi) !important;
+}
+button[onclick*="track"]:hover,
+button[onclick*="Track"]:hover {
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+}
+button[onclick*="parlay"]:hover,
+button[onclick*="Parlay"]:hover {
+    border-color: var(--orange) !important;
+    color: var(--orange) !important;
+}
+
+/* ── Inputs ── */
 input[type=text], input[type=number], input[type=password], select, textarea {
     background: var(--bg-2) !important;
     color: var(--text) !important;
@@ -144,45 +184,92 @@ input[type=text], input[type=number], input[type=password], select, textarea {
 input:focus, select:focus, textarea:focus {
     outline: none !important;
     border-color: var(--accent) !important;
-    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+    box-shadow: 0 0 0 3px rgba(232,160,32,0.15);
 }
 
-/* Tables */
+/* ── Tables ── */
 table {
     background: var(--panel) !important;
     border-radius: 14px;
     overflow: hidden;
     border: 1px solid var(--border);
 }
-th { background: var(--bg-2) !important; color: var(--muted) !important; }
+th { background: var(--bg-2) !important; color: var(--muted) !important; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
 th, td { border-bottom: 1px solid var(--border) !important; }
-tr:hover td { background: rgba(56, 189, 248, 0.04); }
+tr:hover td { background: rgba(232,160,32,0.03); }
 
-/* Pills get a softer modern look */
-.pill,
-.badge {
+/* ── Pills / badges ── */
+.pill, .badge {
     border-radius: 999px;
     font-weight: 700;
     letter-spacing: 0.3px;
 }
 
-/* Scrollbar (webkit) */
-::-webkit-scrollbar { width: 8px; height: 8px; }
+/* Play pick pills */
+.play-pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+}
+.pill-over  { background: rgba(52,211,153,0.15); color: #34d399; border: 1px solid rgba(52,211,153,0.25); }
+.pill-under { background: rgba(167,139,250,0.15); color: #a78bfa; border: 1px solid rgba(167,139,250,0.25); }
+.pill-ml    { background: rgba(232,160,32,0.15); color: var(--accent); border: 1px solid rgba(232,160,32,0.25); }
+.pill-rl    { background: rgba(249,115,22,0.12); color: var(--orange); border: 1px solid rgba(249,115,22,0.2); }
+
+/* Probability colour tiers */
+.prob-elite  { color: #34d399 !important; }
+.prob-strong { color: var(--gold) !important; }
+.prob-fair   { color: var(--muted) !important; }
+
+/* ── Section headers ── */
+.section-hd {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 24px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
 
-/* Selection */
-::selection { background: rgba(56, 189, 248, 0.3); color: var(--text); }
+/* ── Selection ── */
+::selection { background: rgba(232,160,32,0.25); color: var(--text); }
 
-/* Empty-state polish */
+/* ── Empty states ── */
 .empty {
     border: 1px dashed var(--border) !important;
     border-radius: 12px;
     color: var(--muted) !important;
+    padding: 24px !important;
+    text-align: center;
 }
 
-/* Mobile tweaks */
+/* ── Code blocks ── */
+code {
+    background: var(--bg-2);
+    color: var(--accent);
+    padding: 2px 6px;
+    border-radius: 5px;
+    font-size: 12px;
+}
+
+/* ── OVER/UNDER colour override for inline styles using old blue ── */
+[style*="color:#38bdf8"]  { color: var(--accent) !important; }
+[style*="color: #38bdf8"] { color: var(--accent) !important; }
+[style*="border-color:#38bdf8"] { border-color: var(--accent) !important; }
+[style*="color:#818cf8"]  { color: var(--purple) !important; }
+
+/* ── Mobile tweaks ── */
 @media (max-width: 540px) {
     .container { padding: 14px 12px 90px !important; }
     h1 { font-size: 22px !important; }
