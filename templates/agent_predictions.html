@@ -63,6 +63,7 @@
     .pick-body { flex:1; min-width:0; }
     .pick-player { font-size:15px; font-weight:700; color:#e8edff; }
     .pick-line { font-size:13px; color:#38bdf8; font-weight:600; margin:2px 0; }
+    .pick-mvmarket { font-size:11px; color:#a78bfa; margin:3px 0; font-style:italic; }
     .pick-reason { font-size:12px; color:#8b97bd; line-height:1.5; }
     .pick-conf {
         font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px;
@@ -134,14 +135,14 @@
     </div>
 
     <h1>🤖 Agent Predictions</h1>
-    <p class="page-sub">AI analysis of tonight's slate — independent picks powered by all model data</p>
+    <p class="page-sub">Model vs Market — GPT-4o compares our projections against live sportsbook lines to find the real edges</p>
 
     <div class="data-strip" id="data-strip">
         <div class="data-chip">Loading data…</div>
     </div>
 
     <button class="gen-btn" id="gen-btn" onclick="generatePredictions()">
-        ✨ Generate AI Picks
+        🔍 Compare Model vs Market
     </button>
     <div id="status"></div>
 
@@ -212,8 +213,8 @@ async function loadSummary() {
 
 async function generatePredictions() {
     genBtn.disabled = true;
-    genBtn.textContent = '⏳ Analyzing slate…';
-    status.textContent = 'Fetching model data…';
+    genBtn.textContent = '⏳ Comparing model vs market…';
+    status.textContent = 'Pulling projections and live lines…';
     results.innerHTML = '';
 
     try {
@@ -228,13 +229,13 @@ async function generatePredictions() {
         }
         const d = await r.json();
         renderResults(d);
-        status.textContent = `Generated ${new Date().toLocaleTimeString()} · Powered by GPT-4o`;
+        status.textContent = `Analysis complete ${new Date().toLocaleTimeString()} · Model vs Market · GPT-4o`;
     } catch(e) {
         status.textContent = `Error: ${e.message}`;
         results.innerHTML = `<div class="empty">Could not generate predictions. Try again in a moment.</div>`;
     } finally {
         genBtn.disabled = false;
-        genBtn.textContent = '✨ Generate AI Picks';
+        genBtn.textContent = '🔍 Compare Model vs Market';
     }
 }
 
@@ -259,6 +260,7 @@ function renderResults(d) {
                 <div class="pick-body">
                     <div class="pick-player">${esc(p.player)}</div>
                     <div class="pick-line">${esc(p.pick)} — ${esc(p.matchup || '')}</div>
+                    ${p.model_vs_market ? `<div class="pick-mvmarket">📊 ${esc(p.model_vs_market)}</div>` : ''}
                     <div class="pick-reason">${esc(p.reasoning)}</div>
                     <span class="pick-conf ${cc}">${esc(String(p.confidence).toUpperCase())} CONFIDENCE</span>
                 </div>

@@ -1364,59 +1364,86 @@ def api_agent_predictions_generate():
     if not plays and not hr_threats:
         return jsonify({"error": "No data available yet — cache still computing. Try in 60 seconds."}), 503
 
-    # Compact summary for the prompt
+    # Compact summary for the prompt — includes market line/odds so GPT-4o
+    # can explicitly compare model projection vs what the market is pricing.
     def _play_summary(p):
-        return {
-            "player": p.get("player"),
-            "stat": p.get("stat_type"),
-            "pick": p.get("pick"),
-            "probability": round(p.get("probability", 0), 1),
-            "edge": p.get("market_edge_pct"),
-            "matchup": p.get("matchup"),
+        d = {
+            "player":           p.get("player") or p.get("headline"),
+            "stat":             p.get("stat_type") or p.get("stat_label"),
+            "model_pick":       p.get("pick"),
+            "model_projection": p.get("projection"),
+            "book_line":        p.get("line"),
+            "model_probability":round(p.get("probability", 0), 1),
+            "market_edge_pct":  p.get("market_edge_pct") or p.get("prop_edge_pct"),
+            "matchup":          p.get("matchup"),
             "lineup_confirmed": p.get("lineup_confirmed"),
         }
+        # Strip None values to keep the prompt compact
+        return {k: v for k, v in d.items() if v is not None}
 
     def _hr_summary(h):
         return {
-            "player": h.get("player"),
+            "player":  h.get("player") or h.get("headline"),
             "hr_prob": round(h.get("probability", 0), 1),
             "matchup": h.get("matchup"),
         }
 
     def _nrfi_summary(n):
         return {
-            "game": f"{n.get('away_team')} @ {n.get('home_team')}",
+            "game":      f"{n.get('away_team')} @ {n.get('home_team')}",
             "nrfi_prob": round(n.get("probability", 0), 1),
-            "lean": n.get("lean"),
+            "lean":      n.get("lean"),
+        }
+
+    def _f5_summary(g):
+        tl = g.get("total_lean") or {}
+        sl = g.get("spread_lean") or {}
+        return {
+            "game":             f"{g.get('away_team')} @ {g.get('home_team')}",
+            "f5_total_pick":    tl.get("pick"),
+            "f5_projected":     tl.get("projected_runs"),
+            "f5_book_line":     tl.get("book_line"),
+            "f5_model_p_over":  tl.get("model_p_over"),
+            "f5_spread_pick":   sl.get("ml_pick"),
+            "f5_spread_prob":   sl.get("ml_probability"),
         }
 
     data_snapshot = {
-        "top_plays": [_play_summary(p) for p in plays[:20]],
-        "hr_threats_top10": [_hr_summary(h) for h in hr_threats[:10]],
-        "nrfi_top5": [_nrfi_summary(n) for n in nrfi[:5]],
-        "locks": [_play_summary(p) for p in locks[:3]],
+        "top_plays":        [_play_summary(p) for p in plays[:20]],
+        "hr_threats_top10": [_hr_summary(h)   for h in hr_threats[:10]],
+        "nrfi_top5":        [_nrfi_summary(n) for n in nrfi[:5]],
+        "locks":            [_play_summary(p) for p in locks[:3]],
+        "f5_games":         [_f5_summary(g)   for g in f5[:8]],
     }
 
     system_prompt = (
         "You are a sharp MLB sports betting analyst for Baked After Dark Sports Analytics. "
-        "You receive a data snapshot from a machine-learning model that scores tonight's MLB slate. "
-        "Your job is to synthesize the model data, identify the highest-conviction plays, "
-        "flag any plays to avoid (fades), write a brief slate overview, and build one best parlay. "
+        "You receive a structured data snapshot that includes BOTH the internal model's projections "
+        "AND the live market lines/odds from sportsbooks. "
+        "Your primary job is to compare the model vs the market: find plays where the model's projection "
+        "disagrees significantly with the book line (high market_edge_pct = model has an edge), "
+        "flag where the model and market agree (lower conviction), "
+        "and identify any plays the model likes that look like traps. "
+        "Fields explained: model_projection = what the model predicts, book_line = what sportsbooks set, "
+        "market_edge_pct = model's % edge over the implied market price (higher = bigger disagreement with the market). "
         "Be concise, confident, and data-driven. Do not hedge excessively. "
         "Output ONLY valid JSON with this exact shape:\n"
         "{\n"
-        '  "top_picks": [ { "player": "", "pick": "", "matchup": "", "confidence": "High|Medium|Low", "reasoning": "" }, ... ],\n'
+        '  "top_picks": [ { "player": "", "pick": "", "matchup": "", "confidence": "High|Medium|Low", '
+        '"model_vs_market": "one sentence on where model and market disagree", "reasoning": "" }, ... ],\n'
         '  "fades": [ { "player": "", "pick": "", "reasoning": "" }, ... ],\n'
-        '  "game_analysis": "2-3 sentence overall slate read",\n'
+        '  "game_analysis": "2-3 sentence overall slate read including any market inefficiencies spotted",\n'
         '  "best_parlay": { "legs": [ { "player": "", "pick": "" }, ... ], "reasoning": "" }\n'
         "}\n"
-        "top_picks: 5-7 picks ranked by conviction. fades: 2-3 plays the model lists but you would avoid. "
-        "best_parlay: 3-4 legs, pick the most correlated / highest-edge combination."
+        "top_picks: 5-7 picks ranked by conviction, prioritising plays where model_edge_pct is highest. "
+        "fades: 2-3 plays the model lists but the market pricing or matchup context makes you want to avoid. "
+        "best_parlay: 3-4 legs, prefer correlated legs with genuine market edges."
     )
 
     user_prompt = (
-        f"Tonight's MLB data snapshot:\n{_json.dumps(data_snapshot, indent=2)}\n\n"
-        "Analyze this and return your structured picks JSON."
+        f"Tonight's MLB data snapshot (model projections vs live market lines):\n"
+        f"{_json.dumps(data_snapshot, indent=2)}\n\n"
+        "Compare the model vs the market and return your structured picks JSON."
     )
 
     try:
@@ -2959,19 +2986,22 @@ def _run_agent_analysis() -> dict | None:
         return None
 
     def _play_summary(p):
-        return {
-            "player":           p.get("player"),
-            "stat":             p.get("stat_type"),
-            "pick":             p.get("pick"),
-            "probability":      round(p.get("probability", 0), 1),
-            "edge":             p.get("market_edge_pct"),
-            "matchup":          p.get("matchup"),
-            "lineup_confirmed": p.get("lineup_confirmed"),
+        d = {
+            "player":            p.get("player") or p.get("headline"),
+            "stat":              p.get("stat_type") or p.get("stat_label"),
+            "model_pick":        p.get("pick"),
+            "model_projection":  p.get("projection"),
+            "book_line":         p.get("line"),
+            "model_probability": round(p.get("probability", 0), 1),
+            "market_edge_pct":   p.get("market_edge_pct") or p.get("prop_edge_pct"),
+            "matchup":           p.get("matchup"),
+            "lineup_confirmed":  p.get("lineup_confirmed"),
         }
+        return {k: v for k, v in d.items() if v is not None}
 
     def _hr_summary(h):
         return {
-            "player":  h.get("player"),
+            "player":  h.get("player") or h.get("headline"),
             "hr_prob": round(h.get("probability", 0), 1),
             "matchup": h.get("matchup"),
         }
@@ -2983,33 +3013,55 @@ def _run_agent_analysis() -> dict | None:
             "lean":      n.get("lean"),
         }
 
+    def _f5_summary(g):
+        tl = g.get("total_lean") or {}
+        sl = g.get("spread_lean") or {}
+        return {
+            "game":            f"{g.get('away_team')} @ {g.get('home_town')}",
+            "f5_total_pick":   tl.get("pick"),
+            "f5_projected":    tl.get("projected_runs"),
+            "f5_book_line":    tl.get("book_line"),
+            "f5_model_p_over": tl.get("model_p_over"),
+            "f5_spread_pick":  sl.get("ml_pick"),
+            "f5_spread_prob":  sl.get("ml_probability"),
+        }
+
     data_snapshot = {
-        "top_plays":       [_play_summary(p) for p in plays[:20]],
-        "hr_threats_top10":[_hr_summary(h)   for h in hr_threats[:10]],
-        "nrfi_top5":       [_nrfi_summary(n) for n in nrfi[:5]],
-        "locks":           [_play_summary(p) for p in locks[:3]],
+        "top_plays":        [_play_summary(p) for p in plays[:20]],
+        "hr_threats_top10": [_hr_summary(h)   for h in hr_threats[:10]],
+        "nrfi_top5":        [_nrfi_summary(n) for n in nrfi[:5]],
+        "locks":            [_play_summary(p) for p in locks[:3]],
+        "f5_games":         [_f5_summary(g)   for g in f5[:8]],
     }
 
     system_prompt = (
         "You are a sharp MLB sports betting analyst for Baked After Dark Sports Analytics. "
-        "You receive a data snapshot from a machine-learning model that scores tonight's MLB slate. "
-        "Your job is to synthesize the model data, identify the highest-conviction plays, "
-        "flag any plays to avoid (fades), write a brief slate overview, and build one best parlay. "
+        "You receive a structured data snapshot that includes BOTH the internal model's projections "
+        "AND the live market lines/odds from sportsbooks. "
+        "Your primary job is to compare the model vs the market: find plays where the model's projection "
+        "disagrees significantly with the book line (high market_edge_pct = model has an edge), "
+        "flag where the model and market agree (lower conviction), "
+        "and identify any plays the model likes that look like traps. "
+        "Fields explained: model_projection = what the model predicts, book_line = what sportsbooks set, "
+        "market_edge_pct = model's % edge over the implied market price (higher = bigger disagreement with the market). "
         "Be concise, confident, and data-driven. Do not hedge excessively. "
         "Output ONLY valid JSON with this exact shape:\n"
         "{\n"
-        '  "top_picks": [ { "player": "", "pick": "", "matchup": "", "confidence": "High|Medium|Low", "reasoning": "" }, ... ],\n'
+        '  "top_picks": [ { "player": "", "pick": "", "matchup": "", "confidence": "High|Medium|Low", '
+        '"model_vs_market": "one sentence on where model and market disagree", "reasoning": "" }, ... ],\n'
         '  "fades": [ { "player": "", "pick": "", "reasoning": "" }, ... ],\n'
-        '  "game_analysis": "2-3 sentence overall slate read",\n'
+        '  "game_analysis": "2-3 sentence overall slate read including any market inefficiencies spotted",\n'
         '  "best_parlay": { "legs": [ { "player": "", "pick": "" }, ... ], "reasoning": "" }\n'
         "}\n"
-        "top_picks: 5-7 picks ranked by conviction. fades: 2-3 plays the model lists but you would avoid. "
-        "best_parlay: 3-4 legs, pick the most correlated / highest-edge combination."
+        "top_picks: 5-7 picks ranked by conviction, prioritising plays where market_edge_pct is highest. "
+        "fades: 2-3 plays the model lists but the market pricing or matchup context makes you want to avoid. "
+        "best_parlay: 3-4 legs, prefer correlated legs with genuine market edges."
     )
 
     user_prompt = (
-        f"Tonight's MLB data snapshot:\n{_json.dumps(data_snapshot, indent=2)}\n\n"
-        "Analyze this and return your structured picks JSON."
+        f"Tonight's MLB data snapshot (model projections vs live market lines):\n"
+        f"{_json.dumps(data_snapshot, indent=2)}\n\n"
+        "Compare the model vs the market and return your structured picks JSON."
     )
 
     try:
