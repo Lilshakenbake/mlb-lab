@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 from flask import Flask, render_template, redirect, url_for, session, request, jsonify
@@ -2926,6 +2927,186 @@ def game_detail(game_pk):
     )
 
 
+def _run_agent_analysis() -> dict | None:
+    """Run GPT-4o over the current slate and return structured picks dict.
+
+    Reusable core extracted from the /api/agent-predictions/generate route so
+    the daily scheduler can call it without making an HTTP request to itself.
+    Returns the parsed result dict on success, or None on any failure.
+    """
+    import json as _json
+    try:
+        import openai
+    except ImportError:
+        print("[agent-scheduler] openai package not installed — skipping")
+        return None
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        print("[agent-scheduler] OPENAI_API_KEY not set — skipping")
+        return None
+
+    _ensure_plays_refresh()
+    with _PLAYS_LOCK:
+        plays      = list(PLAYS_CACHE["data"])
+        hr_threats = list(HR_THREATS_CACHE["data"])
+        nrfi       = list(NRFI_CACHE["data"])
+        f5         = list(F5_CACHE["data"])
+        locks      = list(LOCKS_CACHE["data"])
+
+    if not plays and not hr_threats:
+        print("[agent-scheduler] cache still empty — aborting analysis")
+        return None
+
+    def _play_summary(p):
+        return {
+            "player":           p.get("player"),
+            "stat":             p.get("stat_type"),
+            "pick":             p.get("pick"),
+            "probability":      round(p.get("probability", 0), 1),
+            "edge":             p.get("market_edge_pct"),
+            "matchup":          p.get("matchup"),
+            "lineup_confirmed": p.get("lineup_confirmed"),
+        }
+
+    def _hr_summary(h):
+        return {
+            "player":  h.get("player"),
+            "hr_prob": round(h.get("probability", 0), 1),
+            "matchup": h.get("matchup"),
+        }
+
+    def _nrfi_summary(n):
+        return {
+            "game":      f"{n.get('away_team')} @ {n.get('home_team')}",
+            "nrfi_prob": round(n.get("probability", 0), 1),
+            "lean":      n.get("lean"),
+        }
+
+    data_snapshot = {
+        "top_plays":       [_play_summary(p) for p in plays[:20]],
+        "hr_threats_top10":[_hr_summary(h)   for h in hr_threats[:10]],
+        "nrfi_top5":       [_nrfi_summary(n) for n in nrfi[:5]],
+        "locks":           [_play_summary(p) for p in locks[:3]],
+    }
+
+    system_prompt = (
+        "You are a sharp MLB sports betting analyst for Baked After Dark Sports Analytics. "
+        "You receive a data snapshot from a machine-learning model that scores tonight's MLB slate. "
+        "Your job is to synthesize the model data, identify the highest-conviction plays, "
+        "flag any plays to avoid (fades), write a brief slate overview, and build one best parlay. "
+        "Be concise, confident, and data-driven. Do not hedge excessively. "
+        "Output ONLY valid JSON with this exact shape:\n"
+        "{\n"
+        '  "top_picks": [ { "player": "", "pick": "", "matchup": "", "confidence": "High|Medium|Low", "reasoning": "" }, ... ],\n'
+        '  "fades": [ { "player": "", "pick": "", "reasoning": "" }, ... ],\n'
+        '  "game_analysis": "2-3 sentence overall slate read",\n'
+        '  "best_parlay": { "legs": [ { "player": "", "pick": "" }, ... ], "reasoning": "" }\n'
+        "}\n"
+        "top_picks: 5-7 picks ranked by conviction. fades: 2-3 plays the model lists but you would avoid. "
+        "best_parlay: 3-4 legs, pick the most correlated / highest-edge combination."
+    )
+
+    user_prompt = (
+        f"Tonight's MLB data snapshot:\n{_json.dumps(data_snapshot, indent=2)}\n\n"
+        "Analyze this and return your structured picks JSON."
+    )
+
+    try:
+        client = openai.OpenAI(api_key=openai_key)
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            temperature=0.4,
+            response_format={"type": "json_object"},
+            timeout=60,
+        )
+        raw = resp.choices[0].message.content
+        return _json.loads(raw)
+    except Exception as e:
+        print(f"[agent-scheduler] OpenAI call failed: {e}")
+        return None
+
+
+def _run_daily_agent_job():
+    """Call the GPT-4o analysis and persist the result as an internal agent pick.
+
+    Tracker deduplication (one row per agent_name per game_date) means this is
+    safe to retry — re-runs on the same calendar day are silently dropped.
+    """
+    print("[agent-scheduler] running daily analysis …")
+    result = _run_agent_analysis()
+    if not result:
+        print("[agent-scheduler] analysis returned nothing — skipping save")
+        return
+
+    top_picks = result.get("top_picks", [])
+    picks_for_tracker = [
+        {
+            "player":     p.get("player", ""),
+            "pick":       p.get("pick", ""),
+            "matchup":    p.get("matchup", ""),
+            "confidence": p.get("confidence", ""),
+            "reasoning":  p.get("reasoning", ""),
+        }
+        for p in top_picks
+    ]
+
+    saved = tracker.add_agent_picks(
+        agent_name="Baked After Dark Bot",
+        picks=picks_for_tracker,
+        agent_source="replit-internal-scheduler",
+        raw_payload=result,
+    )
+    print(f"[agent-scheduler] saved picks — result: {saved}")
+
+
+def _daily_agent_scheduler_loop():
+    """Daemon thread: wait until noon ET, run the analysis, then sleep 24 h and repeat."""
+    # Delay first run until the cache has had time to warm on boot.
+    time.sleep(90)
+
+    while True:
+        now_utc   = datetime.datetime.utcnow()
+        # Eastern Time is UTC-4 during EDT (summer) and UTC-5 during EST.
+        # MLB season runs Apr-Oct (EDT), so UTC-4 is correct for the season.
+        et_offset = datetime.timedelta(hours=4)
+        now_et    = now_utc - et_offset
+
+        target_hour = 12  # noon ET
+        next_run_et = now_et.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if now_et >= next_run_et:
+            # Already past noon today — aim for noon tomorrow.
+            next_run_et += datetime.timedelta(days=1)
+
+        wait_seconds = (next_run_et - now_et).total_seconds()
+        print(f"[agent-scheduler] next run in {wait_seconds / 3600:.1f} h "
+              f"(~{next_run_et.strftime('%Y-%m-%d %H:%M')} ET)")
+        time.sleep(wait_seconds)
+
+        try:
+            _run_daily_agent_job()
+        except Exception as e:
+            print(f"[agent-scheduler] job error: {e}")
+
+        # Sleep 23 h to avoid drifting past the next noon window.
+        time.sleep(23 * 3600)
+
+
+def _start_daily_agent_scheduler():
+    """Spawn the scheduler daemon thread once at startup."""
+    if os.getenv("AUTO_WARM_CACHE", "1") != "1":
+        return  # Disabled alongside cache warming (e.g. test environments).
+    if os.getenv("WERKZEUG_RUN_MAIN") == "false":
+        return  # Skip in Flask reloader parent process.
+    t = threading.Thread(target=_daily_agent_scheduler_loop, daemon=True, name="daily-agent-scheduler")
+    t.start()
+    print("[startup] daily agent scheduler started")
+
+
 def _auto_warm_cache_on_boot():
     """Fire a background slate warm-up once per process at startup.
 
@@ -2948,6 +3129,7 @@ def _auto_warm_cache_on_boot():
 
 
 _auto_warm_cache_on_boot()
+_start_daily_agent_scheduler()
 
 
 if __name__ == "__main__":
