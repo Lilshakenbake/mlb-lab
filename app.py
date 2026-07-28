@@ -96,28 +96,36 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def _check_bearer_token() -> bool:
+    """Return True if the request carries a valid AGENT_API_TOKEN bearer token."""
+    expected = os.getenv("AGENT_API_TOKEN", "").strip()
+    if not expected:
+        return False  # no token configured — bearer auth disabled
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        provided = auth_header[7:].strip()
+        return provided == expected
+    return False
 
-# API key for programmatic / Raspberry Pi agent access.
-# Set AGENT_API_KEY env var to any secret string. Agents pass it as:
-#   Authorization: Bearer <key>
-# Falls back to session cookie so browser users are unaffected.
-AGENT_API_KEY = os.getenv("AGENT_API_KEY", "")
 
 def agent_or_login_required(f):
-    """Accept either a valid browser session OR a Bearer token API key."""
+    """Accept either a valid browser session OR an AGENT_API_TOKEN bearer token.
+
+    External agents (GitHub Actions, Raspberry Pi, etc.) pass:
+        Authorization: Bearer <AGENT_API_TOKEN>
+    Browser users fall through to the session cookie check.
+    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Check bearer token first (for Raspberry Pi / external agents)
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and AGENT_API_KEY:
-            token = auth[len("Bearer "):]
-            if token == AGENT_API_KEY:
-                return f(*args, **kwargs)
-        # Fall back to session cookie (browser users)
-        if session.get("logged_in"):
+        if session.get("logged_in") or _check_bearer_token():
             return f(*args, **kwargs)
-        return jsonify({"error": "Unauthorized. Pass Authorization: Bearer <AGENT_API_KEY>"}), 401
+        return jsonify({"error": "Unauthorized — pass Authorization: Bearer <AGENT_API_TOKEN>"}), 401
     return decorated_function
+
+
+def api_or_login_required(f):
+    """Alias for agent_or_login_required — kept for compatibility."""
+    return agent_or_login_required(f)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -1436,12 +1444,59 @@ def api_agent_predictions_generate():
 @app.route("/api/agent-predictions/submit", methods=["POST"])
 @agent_or_login_required
 def api_agent_predictions_submit():
-    """External agents can POST their own picks here for display."""
+    """External agents POST their own picks here for display on the Agent Predictions page.
+
+    Expected JSON body:
+    {
+        "agent_name": "MyAgent",          # required — display name
+        "agent_source": "github/...",     # optional — URL or repo handle
+        "picks": [                         # required — list of pick objects
+            {
+                "player": "Aaron Judge",
+                "pick": "HR OVER 0.5",
+                "matchup": "NYY @ BOS",
+                "confidence": "High",
+                "reasoning": "..."
+            },
+            ...
+        ]
+    }
+
+    Auth: session cookie OR  Authorization: Bearer <AGENT_API_TOKEN>
+    """
     data = request.get_json(silent=True) or {}
-    # For now just echo back — future: persist picks to tracker
-    return jsonify({"status": "received", "picks_count": len(data.get("picks", []))})
+    agent_name = (data.get("agent_name") or "").strip()
+    if not agent_name:
+        return jsonify({"error": "agent_name is required"}), 400
+    picks = data.get("picks")
+    if not isinstance(picks, list) or len(picks) == 0:
+        return jsonify({"error": "picks must be a non-empty list"}), 400
+
+    result = tracker.add_agent_picks(
+        agent_name=agent_name,
+        picks=picks,
+        agent_source=data.get("agent_source"),
+        raw_payload=data,
+    )
+    if not result.get("ok"):
+        return jsonify({"error": result.get("error", "Failed to store picks")}), 500
+
+    return jsonify({
+        "status": "stored",
+        "id": result.get("id"),
+        "agent_name": agent_name,
+        "picks_count": result.get("picks_count", len(picks)),
+    })
 
 
+
+@app.route("/api/agent-predictions/picks", methods=["GET"])
+@agent_or_login_required
+def api_agent_predictions_picks():
+    """Return today's external agent picks (newest submission per agent first)."""
+    game_date = request.args.get("date")  # optional YYYY-MM-DD override
+    picks = tracker.list_agent_picks(game_date=game_date)
+    return jsonify({"agent_picks": picks, "count": len(picks)})
 @app.route("/admin/warm-cache", methods=["GET", "POST"])
 @login_required
 def admin_warm_cache():

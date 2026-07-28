@@ -89,6 +89,32 @@
     .api-box p { font-size:12px; color:#8b97bd; margin:6px 0 0; }
 
     .empty { color:#475569; text-align:center; padding:40px 0; font-size:14px; }
+
+    /* External agent picks */
+    .ext-agent-section { margin-top:32px; }
+    .ext-agent-header {
+        display:flex; align-items:center; justify-content:space-between;
+        margin-bottom:12px;
+    }
+    .ext-agent-header h2 { font-size:16px; font-weight:800; margin:0; }
+    .ext-agent-header .refresh-btn {
+        background:none; border:1px solid #283253; color:#8b97bd;
+        border-radius:8px; padding:4px 10px; font-size:11px; cursor:pointer;
+    }
+    .ext-agent-header .refresh-btn:hover { border-color:#38bdf8; color:#38bdf8; }
+
+    .agent-block { margin-bottom:20px; }
+    .agent-block-header {
+        display:flex; align-items:center; gap:10px; margin-bottom:8px;
+    }
+    .agent-badge {
+        background:linear-gradient(135deg,#312e81,#1e3a5f);
+        border:1px solid #4c3f9e; border-radius:20px;
+        padding:4px 12px; font-size:12px; font-weight:700; color:#a78bfa;
+    }
+    .agent-meta { font-size:11px; color:#475569; }
+    .agent-meta a { color:#38bdf8; text-decoration:none; }
+    .agent-meta a:hover { text-decoration:underline; }
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/sleek.css') }}">
 </head>
@@ -121,21 +147,32 @@
 
     <div id="results"></div>
 
-    <!-- For external agents (Raspberry Pi etc.) -->
+    <!-- External Agent Picks section -->
+    <div class="ext-agent-section">
+        <div class="ext-agent-header">
+            <h2>🤝 External Agent Picks</h2>
+            <button class="refresh-btn" onclick="loadExternalPicks()">↻ Refresh</button>
+        </div>
+        <div id="ext-agent-results">
+            <div class="empty">Loading external picks…</div>
+        </div>
+    </div>
+
+    <!-- For external agents -->
     <div class="api-box">
-        <h3>🔗 Raspberry Pi / External Agent Access</h3>
-        <p>Set <code>AGENT_API_KEY</code> in Replit Secrets, then from your Pi:</p>
+        <h3>🔗 For external agents / integrations</h3>
+        <p>Pass <code>Authorization: Bearer &lt;AGENT_API_TOKEN&gt;</code> header. Fetch all model data:</p>
         <code>GET /api/agent-data</code>
-        <p style="margin-top:6px; font-size:11px; color:#64748b;">Header required:</p>
-        <code>Authorization: Bearer YOUR_AGENT_API_KEY</code>
-        <p style="margin-top:10px;">Post agent picks back here:</p>
+        <p style="margin-top:8px;">Post your own picks to this page:</p>
         <code>POST /api/agent-predictions/submit</code>
-        <p style="margin-top:6px; font-size:11px; color:#64748b;">Body: <code>{"picks": [{"player":"...", "pick":"...", "reasoning":"..."}]}</code></p>
+        <p style="margin-top:8px;">View submitted picks:</p>
+        <code>GET /api/agent-predictions/picks</code>
+        <p style="margin-top:8px; font-size:11px; color:#475569;">Submit body: <code>{"agent_name":"MyAgent","agent_source":"https://...","picks":[...]}</code></p>
         <div style="margin-top:10px; background:#060b1a; border-radius:6px; padding:10px; font-size:11px; color:#64748b; line-height:1.7;">
-            <strong style="color:#8b97bd;">Python example (for your Pi agent):</strong><br>
+            <strong style="color:#8b97bd;">Python example:</strong><br>
             <code style="color:#38bdf8;">import requests</code><br>
             <code style="color:#38bdf8;">r = requests.get("https://YOUR-APP.replit.app/api/agent-data",</code><br>
-            <code style="color:#38bdf8;">&nbsp;&nbsp;&nbsp;&nbsp;headers={"Authorization": "Bearer YOUR_KEY"})</code><br>
+            <code style="color:#38bdf8;">&nbsp;&nbsp;&nbsp;&nbsp;headers={"Authorization": "Bearer YOUR_AGENT_API_TOKEN"})</code><br>
             <code style="color:#38bdf8;">data = r.json()  # plays, hr_threats, nrfi, f5, locks</code>
         </div>
     </div>
@@ -275,7 +312,59 @@ function esc(s) {
     return String(s ?? '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+async function loadExternalPicks() {
+    const container = document.getElementById('ext-agent-results');
+    container.innerHTML = '<div class="empty">Loading…</div>';
+    try {
+        const r = await fetch('/api/agent-predictions/picks', { credentials: 'same-origin' });
+        const d = await r.json();
+        renderExternalPicks(d.agent_picks || []);
+    } catch(e) {
+        container.innerHTML = '<div class="empty">Could not load external picks.</div>';
+    }
+}
+
+function renderExternalPicks(agentGroups) {
+    const container = document.getElementById('ext-agent-results');
+    if (!agentGroups.length) {
+        container.innerHTML = '<div class="empty">No external agent picks submitted today yet.<br>GitHub agents can POST to <code style="font-size:11px;">/api/agent-predictions/submit</code> with a bearer token.</div>';
+        return;
+    }
+    let html = '';
+    for (const ag of agentGroups) {
+        const ts = ag.submitted_at ? new Date(ag.submitted_at + 'Z').toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+        const sourceLink = ag.agent_source
+            ? `· <a href="${esc(ag.agent_source)}" target="_blank" rel="noopener">${esc(ag.agent_source.replace(/^https?:\/\//, ''))}</a>`
+            : '';
+        html += `<div class="agent-block">
+            <div class="agent-block-header">
+                <span class="agent-badge">🤖 ${esc(ag.agent_name)}</span>
+                <span class="agent-meta">${ts ? 'Submitted ' + ts : ''} ${sourceLink}</span>
+            </div>`;
+        if (ag.picks && ag.picks.length) {
+            ag.picks.forEach((p, i) => {
+                const cc = confClass(p.confidence);
+                html += `
+                <div class="pick-card ${cc}">
+                    <div class="pick-rank">#${i+1}</div>
+                    <div class="pick-body">
+                        <div class="pick-player">${esc(p.player || p.headline || '')}</div>
+                        <div class="pick-line">${esc(p.pick || '')}${p.matchup ? ' — ' + esc(p.matchup) : ''}</div>
+                        ${p.reasoning ? `<div class="pick-reason">${esc(p.reasoning)}</div>` : ''}
+                        ${p.confidence ? `<span class="pick-conf ${cc}">${esc(String(p.confidence).toUpperCase())} CONFIDENCE</span>` : ''}
+                    </div>
+                </div>`;
+            });
+        } else {
+            html += '<div class="empty" style="padding:16px 0;">No picks in this submission.</div>';
+        }
+        html += '</div>';
+    }
+    container.innerHTML = html;
+}
+
 loadSummary();
+loadExternalPicks();
 </script>
 </body>
 </html>

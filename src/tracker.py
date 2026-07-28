@@ -1,5 +1,9 @@
-"""SQLite-backed watchlist for tracking picks and grading them later."""
+"""SQLite-backed watchlist for tracking picks and grading them later.
 
+Also stores external agent picks submitted via the API.
+"""
+
+import json
 import os
 import sqlite3
 import threading
@@ -167,6 +171,18 @@ def init_db():
                 );
                 CREATE INDEX IF NOT EXISTS idx_result ON tracked_plays(result);
                 CREATE INDEX IF NOT EXISTS idx_game_date ON tracked_plays(game_date);
+
+                CREATE TABLE IF NOT EXISTS agent_picks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    submitted_at TEXT NOT NULL,
+                    game_date TEXT NOT NULL,
+                    agent_name TEXT NOT NULL,
+                    agent_source TEXT,
+                    picks_json TEXT NOT NULL,
+                    raw_payload TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_game_date ON agent_picks(game_date);
+                CREATE INDEX IF NOT EXISTS idx_agent_name ON agent_picks(agent_name);
                 """
             )
             # Lightweight migration: add `odds` column if it doesn't exist yet
@@ -520,3 +536,76 @@ def summary_stats() -> dict:
         "clv_count": clv_count,
         "market_breakdown": market_breakdown,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# External Agent Picks
+# ─────────────────────────────────────────────────────────────────────────────
+
+def add_agent_picks(agent_name: str, picks: list, agent_source: str | None = None,
+                    raw_payload: dict | None = None) -> dict:
+    """Persist a batch of picks submitted by an external agent.
+
+    Deduplication: one row per (agent_name, game_date). If the agent submits
+    again on the same date, the row is replaced so the page always shows the
+    latest submission.
+    """
+    init_db()
+    if not agent_name or not isinstance(picks, list):
+        return {"ok": False, "error": "agent_name and picks list required"}
+    today = date.today().isoformat()
+    submitted_at = datetime.utcnow().isoformat(timespec="seconds")
+    picks_json = json.dumps(picks)
+    raw_json = json.dumps(raw_payload) if raw_payload else None
+
+    with _connect() as conn:
+        # Upsert: delete existing row for same agent+date, then insert fresh
+        conn.execute(
+            "DELETE FROM agent_picks WHERE agent_name=? AND game_date=?",
+            (agent_name, today),
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO agent_picks (submitted_at, game_date, agent_name, agent_source, picks_json, raw_payload)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (submitted_at, today, agent_name, agent_source, picks_json, raw_json),
+        )
+        return {"ok": True, "id": cur.lastrowid, "picks_count": len(picks)}
+
+
+def list_agent_picks(game_date: str | None = None, limit: int = 50) -> list[dict]:
+    """Return stored external agent picks, newest first.
+
+    If game_date is given (YYYY-MM-DD), filter to that date; otherwise return
+    today's submissions only.
+    """
+    init_db()
+    target_date = game_date or date.today().isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, submitted_at, game_date, agent_name, agent_source, picks_json
+            FROM agent_picks
+            WHERE game_date = ?
+            ORDER BY submitted_at DESC
+            LIMIT ?
+            """,
+            (target_date, limit),
+        ).fetchall()
+
+    result = []
+    for r in rows:
+        try:
+            picks = json.loads(r["picks_json"])
+        except (json.JSONDecodeError, TypeError):
+            picks = []
+        result.append({
+            "id": r["id"],
+            "submitted_at": r["submitted_at"],
+            "game_date": r["game_date"],
+            "agent_name": r["agent_name"],
+            "agent_source": r["agent_source"],
+            "picks": picks,
+        })
+    return result
