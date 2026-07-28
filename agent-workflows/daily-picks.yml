@@ -1,0 +1,186 @@
+name: Daily MLB Picks
+
+on:
+  # Runs every day at 11:00 AM Eastern Time (16:00 UTC)
+  schedule:
+    - cron: '0 16 * * *'
+  # Allow manual trigger from the GitHub Actions UI
+  workflow_dispatch:
+
+jobs:
+  post-picks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests openai
+
+      - name: Fetch data and post picks
+        env:
+          MLB_APP_URL: ${{ secrets.MLB_APP_URL }}
+          AGENT_API_TOKEN: ${{ secrets.AGENT_API_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python - <<'PYEOF'
+          import os, sys, json, time
+          import requests
+          from openai import OpenAI
+
+          APP_URL      = os.environ["MLB_APP_URL"].rstrip("/")
+          TOKEN        = os.environ["AGENT_API_TOKEN"]
+          OPENAI_KEY   = os.environ["OPENAI_API_KEY"]
+          HEADERS      = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
+          AGENT_NAME   = "Ai-assistant (GitHub)"
+          AGENT_SOURCE = "https://github.com/jupitermoon7/Ai-assistant"
+
+          # ── 1. Fetch today's data from the MLB Lab ──────────────────────────
+          print("Fetching agent data…")
+          for attempt in range(3):
+              try:
+                  r = requests.get(f"{APP_URL}/api/agent-data", headers=HEADERS, timeout=30)
+                  r.raise_for_status()
+                  data = r.json()
+                  break
+              except Exception as e:
+                  print(f"  attempt {attempt+1} failed: {e}")
+                  if attempt == 2:
+                      print("ERROR: could not fetch agent data after 3 attempts")
+                      sys.exit(1)
+                  time.sleep(10)
+
+          plays      = data.get("plays", [])
+          hr_threats = data.get("hr_threats", [])
+          nrfi       = data.get("nrfi", [])
+          locks      = data.get("locks", [])
+          f5         = data.get("f5", [])
+
+          if data.get("computing"):
+              print("Cache still computing — waiting 60 s…")
+              time.sleep(60)
+              r = requests.get(f"{APP_URL}/api/agent-data", headers=HEADERS, timeout=30)
+              r.raise_for_status()
+              data = r.json()
+              plays      = data.get("plays", [])
+              hr_threats = data.get("hr_threats", [])
+              locks      = data.get("locks", [])
+
+          if not plays and not hr_threats:
+              print("No data available yet — skipping today's run.")
+              sys.exit(0)
+
+          print(f"  plays={len(plays)}, hr_threats={len(hr_threats)}, locks={len(locks)}, nrfi={len(nrfi)}, f5={len(f5)}")
+
+          # ── 2. Build compact summary for the LLM ───────────────────────────
+          def _play(p):
+              d = {
+                  "player":       p.get("player") or p.get("headline"),
+                  "stat":         p.get("stat_type") or p.get("stat_label"),
+                  "pick":         p.get("pick"),
+                  "projection":   p.get("projection"),
+                  "line":         p.get("line"),
+                  "probability":  round(p.get("probability", 0), 1),
+                  "edge_pct":     p.get("market_edge_pct") or p.get("prop_edge_pct"),
+                  "matchup":      p.get("matchup"),
+              }
+              return {k: v for k, v in d.items() if v is not None}
+
+          def _hr(h):
+              return {"player": h.get("player") or h.get("headline"),
+                      "hr_prob": round(h.get("probability", 0), 1),
+                      "matchup": h.get("matchup")}
+
+          def _nrfi(n):
+              return {"game": n.get("matchup") or f"{n.get('away_team','?')} @ {n.get('home_team','?')}",
+                      "nrfi_prob": round(n.get("probability", 0), 1),
+                      "lean": n.get("pick") or n.get("lean"),
+                      "away_pitcher": n.get("away_pitcher"),
+                      "home_pitcher": n.get("home_pitcher")}
+
+          snapshot = {
+              "top_plays":        [_play(p) for p in plays[:20]],
+              "locks":            [_play(p) for p in locks[:5]],
+              "hr_threats_top8":  [_hr(h)   for h in hr_threats[:8]],
+              "nrfi_top4":        [_nrfi(n) for n in nrfi[:4]],
+          }
+
+          # ── 3. Ask GPT-4o to rank and pick ─────────────────────────────────
+          print("Running GPT-4o analysis…")
+          client = OpenAI(api_key=OPENAI_KEY)
+
+          system_prompt = (
+              "You are a sharp MLB sports betting analyst for the Ai-assistant GitHub agent. "
+              "You receive today's MLB model projections vs live sportsbook lines. "
+              "Pick the 5 best plays where the model has the biggest edge over the market. "
+              "Also flag 1-2 plays to avoid. "
+              "Output ONLY valid JSON:\n"
+              "{\n"
+              '  "picks": [\n'
+              '    {\n'
+              '      "player": "",\n'
+              '      "pick": "",\n'
+              '      "matchup": "",\n'
+              '      "confidence": "High|Medium|Low",\n'
+              '      "reasoning": ""\n'
+              '    }\n'
+              '  ],\n'
+              '  "fades": [\n'
+              '    { "player": "", "pick": "", "reasoning": "" }\n'
+              '  ]\n'
+              "}\n"
+              "picks: 5 plays ranked by conviction (highest market edge first). "
+              "fades: 1-2 plays the model lists but context makes you avoid. "
+              "Keep reasoning under 80 words per pick."
+          )
+
+          resp = client.chat.completions.create(
+              model="gpt-4o",
+              messages=[
+                  {"role": "system", "content": system_prompt},
+                  {"role": "user",   "content": f"Tonight's MLB data:\n{json.dumps(snapshot, indent=2)}\n\nReturn your JSON picks."},
+              ],
+              temperature=0.35,
+              response_format={"type": "json_object"},
+              timeout=45,
+          )
+          result = json.loads(resp.choices[0].message.content)
+
+          raw_picks = result.get("picks", [])
+          fades     = result.get("fades", [])
+          all_picks = raw_picks + [
+              {**f, "pick": f.get("pick", "FADE"), "confidence": "Low", "reasoning": "(fade) " + f.get("reasoning", "")}
+              for f in fades
+          ]
+
+          if not all_picks:
+              print("GPT-4o returned no picks — skipping POST.")
+              sys.exit(0)
+
+          print(f"  got {len(raw_picks)} picks + {len(fades)} fades")
+
+          # ── 4. POST picks to the MLB Lab ───────────────────────────────────
+          print("Posting picks to MLB Lab…")
+          payload = {
+              "agent_name":   AGENT_NAME,
+              "agent_source": AGENT_SOURCE,
+              "picks":        all_picks,
+          }
+          r = requests.post(
+              f"{APP_URL}/api/agent-predictions/submit",
+              headers=HEADERS,
+              json=payload,
+              timeout=20,
+          )
+          r.raise_for_status()
+          out = r.json()
+          print(f"  stored: id={out.get('id')}, picks_count={out.get('picks_count')}")
+          print("Done ✓")
+          PYEOF
