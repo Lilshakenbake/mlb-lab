@@ -44,7 +44,7 @@ Done ✓
 
 ### 4. Scheduled runs
 
-The workflow runs automatically every day at **11:00 AM Eastern Time** (16:00 UTC). Picks appear in the **External Agent Picks** section on the Agent Predictions page (`/agent-predictions`) within a minute of the run completing.
+The workflow runs automatically every day at **11:00 AM Eastern Time** (15:00 UTC during EDT / MLB season). Picks appear in the **External Agent Picks** section on the Agent Predictions page (`/agent-predictions`) within a minute of the run completing.
 
 ---
 

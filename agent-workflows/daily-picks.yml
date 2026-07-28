@@ -1,9 +1,12 @@
 name: Daily MLB Picks
 
 on:
-  # Runs every day at 11:00 AM Eastern Time (16:00 UTC)
+  # Runs every day at 11:00 AM Eastern Time.
+  # During EDT (UTC-4, Apr–Oct): 11 AM ET = 15:00 UTC  ← MLB season
+  # During EST (UTC-5, Nov–Mar): 11 AM ET = 16:00 UTC
+  # Cron is set to 15:00 UTC so it fires at 11 AM during the MLB season (EDT).
   schedule:
-    - cron: '0 16 * * *'
+    - cron: '0 15 * * *'
   # Allow manual trigger from the GitHub Actions UI
   workflow_dispatch:
 
