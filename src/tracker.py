@@ -1,6 +1,6 @@
 """SQLite-backed watchlist for tracking picks and grading them later.
 
-Also stores external agent picks submitted via the API.
+Also stores external agent picks submitted via the API, and page-view counts.
 """
 
 import json
@@ -22,7 +22,6 @@ DEFAULT_ODDS = -110
 
 
 def american_to_implied(american_odds) -> float | None:
-    """Convert American odds to implied probability (0-1). Includes vig."""
     try:
         o = float(american_odds)
     except (TypeError, ValueError):
@@ -35,12 +34,6 @@ def american_to_implied(american_odds) -> float | None:
 
 
 def compute_clv_pp(opening_odds, closing_odds) -> float | None:
-    """CLV expressed in implied-probability percentage points.
-
-    Positive = you beat the close (good — closing line moved past your number).
-    Negative = market moved against your bet (bad).
-
-    Example: bet OVER -110 (47.6%), closes -130 (56.5%) → +8.9pp CLV."""
     p_open = american_to_implied(opening_odds)
     p_close = american_to_implied(closing_odds)
     if p_open is None or p_close is None:
@@ -49,8 +42,6 @@ def compute_clv_pp(opening_odds, closing_odds) -> float | None:
 
 
 def odds_to_profit(american_odds) -> float:
-    """Profit per 1.0u stake on a winning bet at the given American odds.
-    -110 -> +0.909, +130 -> +1.30."""
     try:
         o = float(american_odds)
     except (TypeError, ValueError):
@@ -62,67 +53,20 @@ def odds_to_profit(american_odds) -> float:
     return 100.0 / abs(o)
 
 
-def units_for(result: str, american_odds, stake: float = 1.0) -> float:
-    """Units P/L for a given stake size. Default stake = 1u."""
-    s = float(stake) if stake is not None else 1.0
-    if result == "WIN":
-        return round(odds_to_profit(american_odds) * s, 3)
-    if result == "LOSS":
-        return round(-1.0 * s, 3)
-    return 0.0  # PUSH or pending
+def kelly_fraction(prob: float, american_odds, fraction: float = 0.25) -> float:
+    b = odds_to_profit(american_odds)
+    q = 1.0 - prob
+    if b <= 0:
+        return 0.0
+    k = (b * prob - q) / b
+    return round(max(0.0, k) * fraction, 4)
 
 
-def suggest_units(probability, edge=None, odds=None) -> float:
-    """Confidence-weighted stake sizing with edge and odds awareness.
-
-    Combines three signals:
-      • Probability — how confident the model is (0–100)
-      • Edge — projection vs line gap (in stat units, e.g. 0.4 hits)
-      • Odds — payout matters (a -200 fav needs a bigger stake to mean anything)
-
-    Output range: 0.25u – 4.0u. Big-edge high-confidence plays get real money;
-    coin-flip picks get a sprinkle so the bankroll spreads across the board."""
-    try:
-        p = float(probability or 0)
-    except (TypeError, ValueError):
-        p = 0.0
-    try:
-        e = abs(float(edge)) if edge is not None else 0.0
-    except (TypeError, ValueError):
-        e = 0.0
-
-    # Base unit from probability tier (the "confidence floor")
-    if p >= 72: base = 2.5
-    elif p >= 67: base = 2.0
-    elif p >= 62: base = 1.5
-    elif p >= 57: base = 1.0
-    elif p >= 53: base = 0.5
-    else: base = 0.25
-
-    # Edge multiplier — a 0.5+ stat-unit edge is huge, double the stake.
-    # 0.2 edge ≈ league average, no boost. <0.1 = shrink.
-    if e >= 0.50: edge_mult = 1.6
-    elif e >= 0.35: edge_mult = 1.3
-    elif e >= 0.20: edge_mult = 1.0
-    elif e >= 0.10: edge_mult = 0.85
-    else: edge_mult = 0.7
-
-    # Odds adjustment — small bumps so heavy favs still mean something,
-    # underdogs don't get oversized (variance protection).
-    odds_mult = 1.0
-    if odds is not None:
-        try:
-            o = float(odds)
-            if o <= -200: odds_mult = 1.15      # need bigger stake for thin payout
-            elif o <= -150: odds_mult = 1.05
-            elif o >= 150: odds_mult = 0.85     # variance — trim plus-money
-            elif o >= 250: odds_mult = 0.65
-        except (TypeError, ValueError):
-            pass
-
-    units = base * edge_mult * odds_mult
-    # Hard caps: never less than 0.25u, never more than 4u (bankroll safety).
-    return round(max(0.25, min(4.0, units)), 2)
+def kelly_units(prob: float, american_odds,
+                fraction: float = 0.25,
+                lo: float = 0.25, hi: float = 4.0) -> float:
+    raw = kelly_fraction(prob / 100.0, american_odds, fraction)
+    return round(max(lo, min(hi, raw * 10)), 2)
 
 
 def _ensure_dir():
@@ -183,186 +127,171 @@ def init_db():
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_game_date ON agent_picks(game_date);
                 CREATE INDEX IF NOT EXISTS idx_agent_name ON agent_picks(agent_name);
+
+                CREATE TABLE IF NOT EXISTS page_views (
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts       TEXT NOT NULL,
+                    date     TEXT NOT NULL,
+                    session  TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_pv_date    ON page_views(date);
+                CREATE INDEX IF NOT EXISTS idx_pv_session ON page_views(session);
                 """
             )
-            # Lightweight migration: add `odds` column if it doesn't exist yet
+            # Lightweight migrations
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracked_plays)")}
             if "odds" not in cols:
                 conn.execute(f"ALTER TABLE tracked_plays ADD COLUMN odds REAL DEFAULT {DEFAULT_ODDS}")
-                conn.execute(
-                    "UPDATE tracked_plays SET odds=? WHERE odds IS NULL",
-                    (DEFAULT_ODDS,),
-                )
-            # Per-pick unit sizing. 1.0 default = legacy behavior.
+                conn.execute("UPDATE tracked_plays SET odds=? WHERE odds IS NULL", (DEFAULT_ODDS,))
             if "units" not in cols:
                 conn.execute("ALTER TABLE tracked_plays ADD COLUMN units REAL DEFAULT 1.0")
                 conn.execute("UPDATE tracked_plays SET units=1.0 WHERE units IS NULL")
-            # CLV (closing-line value) — captured at bet time + first pitch.
-            for col, decl in (
-                ("opening_odds", "REAL"),
-                ("opening_book", "TEXT"),
-                ("closing_odds", "REAL"),
-                ("closing_book", "TEXT"),
-                ("clv_pp", "REAL"),
-            ):
-                if col not in cols:
-                    conn.execute(f"ALTER TABLE tracked_plays ADD COLUMN {col} {decl}")
+            if "opening_odds" not in cols:
+                conn.execute("ALTER TABLE tracked_plays ADD COLUMN opening_odds REAL")
+            if "closing_odds" not in cols:
+                conn.execute("ALTER TABLE tracked_plays ADD COLUMN closing_odds REAL")
+            if "clv_pp" not in cols:
+                conn.execute("ALTER TABLE tracked_plays ADD COLUMN clv_pp REAL")
+            if "market_edge_pct" not in cols:
+                conn.execute("ALTER TABLE tracked_plays ADD COLUMN market_edge_pct REAL")
         _INITIALIZED = True
 
 
-def _to_float(v):
-    try:
-        if v is None or v == "":
-            return None
-        return float(v)
-    except (ValueError, TypeError):
-        return None
+# ── Visitor counter ────────────────────────────────────────────────────────────
 
+def record_visit(session_id: str | None = None) -> None:
+    """Log one page view. Non-blocking — failures are silently swallowed."""
+    try:
+        init_db()
+        now = datetime.utcnow()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO page_views (ts, date, session) VALUES (?,?,?)",
+                (now.isoformat(), now.strftime("%Y-%m-%d"), session_id),
+            )
+    except Exception:
+        pass
+
+
+def get_visit_stats() -> dict:
+    """Return all-time total visits, today's visits, and unique sessions today."""
+    try:
+        init_db()
+        today = date.today().isoformat()
+        with _connect() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM page_views").fetchone()[0]
+            today_total = conn.execute(
+                "SELECT COUNT(*) FROM page_views WHERE date=?", (today,)
+            ).fetchone()[0]
+            today_unique = conn.execute(
+                "SELECT COUNT(DISTINCT session) FROM page_views WHERE date=? AND session IS NOT NULL",
+                (today,),
+            ).fetchone()[0]
+            # Last 7 days breakdown
+            daily = conn.execute(
+                """SELECT date, COUNT(*) as visits, COUNT(DISTINCT session) as unique_sessions
+                   FROM page_views
+                   WHERE date >= date('now','-6 days')
+                   GROUP BY date ORDER BY date DESC""",
+            ).fetchall()
+        return {
+            "total_all_time": total,
+            "today_total": today_total,
+            "today_unique": today_unique,
+            "last_7_days": [
+                {"date": r["date"], "visits": r["visits"], "unique": r["unique_sessions"]}
+                for r in daily
+            ],
+        }
+    except Exception as e:
+        return {"error": str(e), "total_all_time": 0, "today_total": 0, "today_unique": 0, "last_7_days": []}
+
+
+# ── Watchlist ──────────────────────────────────────────────────────────────────
 
 def add_play(payload: dict) -> dict:
-    """Insert a play. Dedupe by (game_pk, kind, headline, stat_label, pick, line) on same date."""
     init_db()
-    today = (payload.get("game_date") or date.today().isoformat())[:10]
     headline = (payload.get("headline") or "").strip()
     if not headline:
-        return {"ok": False, "error": "missing headline"}
+        return {"ok": False, "error": "headline required"}
 
-    odds_in = _to_float(payload.get("odds"))
-    if odds_in is None:
-        odds_in = float(DEFAULT_ODDS)
-    prob = _to_float(payload.get("probability")) or 0.0
-    units_in = _to_float(payload.get("units"))
-    if units_in is None or units_in <= 0:
-        edge_in = _to_float(payload.get("edge"))
-        units_in = suggest_units(prob, edge=edge_in, odds=odds_in)
-    # Snapshot the line at bet-placement time for later CLV calc.
-    opening_odds_in = _to_float(payload.get("opening_odds"))
-    if opening_odds_in is None:
-        opening_odds_in = odds_in  # fall back to user-entered/book odds
-    opening_book_in = (payload.get("opening_book") or payload.get("book") or "").strip() or None
-    row = {
-        "created_at": datetime.utcnow().isoformat(timespec="seconds"),
-        "game_pk": payload.get("game_pk"),
-        "game_date": today,
-        "matchup": payload.get("matchup"),
-        "kind": payload.get("kind"),
-        "headline": headline,
-        "stat_label": payload.get("stat_label"),
-        "pick": payload.get("pick"),
-        "line": _to_float(payload.get("line")),
-        "projection": _to_float(payload.get("projection")),
-        "edge": _to_float(payload.get("edge")),
-        "probability": prob,
-        "model_used": 1 if payload.get("model_used") else 0,
-        "odds": odds_in,
-        "units": units_in,
-        "opening_odds": opening_odds_in,
-        "opening_book": opening_book_in,
-    }
+    stat_label = (payload.get("stat_label") or payload.get("stat") or "").strip()
+    pick = (payload.get("pick") or "").strip().upper()
+    if pick not in ("OVER", "UNDER", "ML", "RL", "YES", "NO", "PASS", ""):
+        pick = ""
+
+    try:
+        line = float(payload["line"]) if payload.get("line") is not None else None
+    except (TypeError, ValueError):
+        line = None
+    try:
+        proj = float(payload["projection"]) if payload.get("projection") is not None else None
+    except (TypeError, ValueError):
+        proj = None
+    try:
+        edge = float(payload["edge"]) if payload.get("edge") is not None else None
+    except (TypeError, ValueError):
+        edge = None
+    try:
+        prob = float(payload["probability"]) if payload.get("probability") is not None else None
+    except (TypeError, ValueError):
+        prob = None
+    try:
+        odds = float(payload["odds"]) if payload.get("odds") is not None else float(DEFAULT_ODDS)
+    except (TypeError, ValueError):
+        odds = float(DEFAULT_ODDS)
+    try:
+        units = float(payload["units"]) if payload.get("units") is not None else 1.0
+        units = max(0.25, min(10.0, units))
+    except (TypeError, ValueError):
+        units = 1.0
+    try:
+        market_edge_pct = float(payload["market_edge_pct"]) if payload.get("market_edge_pct") is not None else None
+    except (TypeError, ValueError):
+        market_edge_pct = None
+
+    game_pk = payload.get("game_pk")
+    matchup = (payload.get("matchup") or "").strip() or None
+    kind = (payload.get("kind") or "hitter").strip()
+    model_used = int(bool(payload.get("model_used", False)))
+    now = datetime.utcnow().isoformat()
+    game_date = date.today().isoformat()
 
     with _connect() as conn:
-        existing = conn.execute(
-            """
-            SELECT id FROM tracked_plays
-            WHERE game_date=? AND IFNULL(game_pk,-1)=IFNULL(?,-1)
-              AND IFNULL(kind,'')=IFNULL(?,'')
-              AND IFNULL(headline,'')=IFNULL(?,'')
-              AND IFNULL(stat_label,'')=IFNULL(?,'')
-              AND IFNULL(pick,'')=IFNULL(?,'')
-              AND IFNULL(line,-999)=IFNULL(?,-999)
-            """,
-            (
-                row["game_date"], row["game_pk"], row["kind"],
-                row["headline"], row["stat_label"], row["pick"], row["line"],
-            ),
-        ).fetchone()
-        if existing:
-            return {"ok": True, "id": existing["id"], "duplicate": True}
-
         cur = conn.execute(
-            """
-            INSERT INTO tracked_plays
-              (created_at, game_pk, game_date, matchup, kind, headline,
-               stat_label, pick, line, projection, edge, probability, model_used,
-               odds, units, opening_odds, opening_book)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                row["created_at"], row["game_pk"], row["game_date"], row["matchup"],
-                row["kind"], row["headline"], row["stat_label"], row["pick"],
-                row["line"], row["projection"], row["edge"], row["probability"],
-                row["model_used"], row["odds"], row["units"],
-                row["opening_odds"], row["opening_book"],
-            ),
+            """INSERT INTO tracked_plays
+               (created_at, game_pk, game_date, matchup, kind, headline,
+                stat_label, pick, line, projection, edge, probability,
+                model_used, odds, units, market_edge_pct)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (now, game_pk, game_date, matchup, kind, headline,
+             stat_label, pick, line, proj, edge, prob,
+             model_used, odds, units, market_edge_pct),
         )
-        return {"ok": True, "id": cur.lastrowid, "duplicate": False}
+        play_id = cur.lastrowid
+
+    return {"ok": True, "id": play_id}
 
 
-def list_pending_for_clv() -> list[dict]:
-    """Plays missing closing_odds — candidates for the close-line snapshot."""
+def get_plays(result_filter: str | None = None, limit: int = 200) -> list[dict]:
     init_db()
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM tracked_plays WHERE closing_odds IS NULL"
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def set_closing_odds(play_id: int, closing_odds, closing_book: str | None = None) -> bool:
-    """Write the closing line for a play and compute CLV (in pp)."""
-    init_db()
-    co = _to_float(closing_odds)
-    if co is None:
-        return False
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT opening_odds, odds FROM tracked_plays WHERE id=?", (play_id,)
-        ).fetchone()
-        if not row:
-            return False
-        opening = row["opening_odds"] if row["opening_odds"] is not None else row["odds"]
-        clv = compute_clv_pp(opening, co)
-        cur = conn.execute(
-            "UPDATE tracked_plays SET closing_odds=?, closing_book=?, clv_pp=? WHERE id=?",
-            (co, closing_book, clv, play_id),
-        )
-        return cur.rowcount > 0
-
-
-def update_odds(play_id: int, odds) -> bool:
-    init_db()
-    o = _to_float(odds)
-    if o is None:
-        return False
-    with _connect() as conn:
-        cur = conn.execute("UPDATE tracked_plays SET odds=? WHERE id=?", (o, play_id))
-        return cur.rowcount > 0
-
-
-def update_units(play_id: int, units) -> bool:
-    """Update stake size for a pick. Clamped to [0.1, 10] units for sanity."""
-    init_db()
-    u = _to_float(units)
-    if u is None or u <= 0:
-        return False
-    u = max(0.1, min(10.0, u))
-    with _connect() as conn:
-        cur = conn.execute("UPDATE tracked_plays SET units=? WHERE id=?", (u, play_id))
-        return cur.rowcount > 0
-
-
-def list_plays(only_pending: bool = False, limit: int | None = None) -> list[dict]:
-    init_db()
-    sql = "SELECT * FROM tracked_plays"
-    params = []
-    if only_pending:
-        sql += " WHERE result IS NULL"
-    sql += " ORDER BY (result IS NOT NULL) ASC, game_date DESC, created_at DESC"
-    if limit:
-        sql += " LIMIT ?"
-        params.append(limit)
-    with _connect() as conn:
-        rows = conn.execute(sql, params).fetchall()
+        if result_filter and result_filter.upper() in VALID_RESULTS | {"OPEN"}:
+            if result_filter.upper() == "OPEN":
+                rows = conn.execute(
+                    "SELECT * FROM tracked_plays WHERE result IS NULL ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM tracked_plays WHERE result=? ORDER BY created_at DESC LIMIT ?",
+                    (result_filter.upper(), limit),
+                ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM tracked_plays ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -371,226 +300,91 @@ def settle_play(play_id: int, result: str, actual_value=None, notes: str | None 
     result = (result or "").upper().strip()
     if result not in VALID_RESULTS:
         return False
+    now = datetime.utcnow().isoformat()
     with _connect() as conn:
         cur = conn.execute(
-            """
-            UPDATE tracked_plays
-            SET result=?, actual_value=?, notes=?, settled_at=?
-            WHERE id=?
-            """,
-            (result, _to_float(actual_value), notes, datetime.utcnow().isoformat(timespec="seconds"), play_id),
+            "UPDATE tracked_plays SET result=?, actual_value=?, notes=?, settled_at=? WHERE id=?",
+            (result, actual_value, notes, now, play_id),
         )
-        return cur.rowcount > 0
-
-
-def delete_play(play_id: int) -> bool:
-    init_db()
-    with _connect() as conn:
-        cur = conn.execute("DELETE FROM tracked_plays WHERE id=?", (play_id,))
-        return cur.rowcount > 0
+    return cur.rowcount > 0
 
 
 def reopen_play(play_id: int) -> bool:
     init_db()
     with _connect() as conn:
         cur = conn.execute(
-            "UPDATE tracked_plays SET result=NULL, actual_value=NULL, notes=NULL, settled_at=NULL WHERE id=?",
+            "UPDATE tracked_plays SET result=NULL, settled_at=NULL WHERE id=?",
             (play_id,),
         )
-        return cur.rowcount > 0
+    return cur.rowcount > 0
 
 
-def summary_stats() -> dict:
+def delete_play(play_id: int) -> bool:
     init_db()
     with _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT
-              COUNT(*)                                 AS total,
-              SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) AS pending,
-              SUM(CASE WHEN result='WIN'  THEN 1 ELSE 0 END) AS wins,
-              SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses,
-              SUM(CASE WHEN result='PUSH' THEN 1 ELSE 0 END) AS pushes,
-              AVG(CASE WHEN result IS NOT NULL THEN probability END) AS avg_pred_prob,
-              AVG(CASE WHEN result IS NOT NULL AND model_used=1 THEN probability END) AS avg_pred_prob_model
-            FROM tracked_plays
-            """
-        ).fetchone()
+        cur = conn.execute("DELETE FROM tracked_plays WHERE id=?", (play_id,))
+    return cur.rowcount > 0
 
-        model_row = conn.execute(
-            """
-            SELECT
-              SUM(CASE WHEN result='WIN'  THEN 1 ELSE 0 END) AS wins,
-              SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses,
-              SUM(CASE WHEN result='PUSH' THEN 1 ELSE 0 END) AS pushes
-            FROM tracked_plays
-            WHERE model_used=1 AND result IS NOT NULL
-            """
-        ).fetchone()
 
-    total = row["total"] or 0
-    pending = row["pending"] or 0
-    wins = row["wins"] or 0
-    losses = row["losses"] or 0
-    pushes = row["pushes"] or 0
-    decided = wins + losses
-    win_rate = round((wins / decided) * 100, 1) if decided > 0 else None
-    avg_pred = round(row["avg_pred_prob"], 1) if row["avg_pred_prob"] is not None else None
-
-    model_wins = model_row["wins"] or 0
-    model_losses = model_row["losses"] or 0
-    model_decided = model_wins + model_losses
-    model_win_rate = round((model_wins / model_decided) * 100, 1) if model_decided > 0 else None
-    avg_pred_model = round(row["avg_pred_prob_model"], 1) if row["avg_pred_prob_model"] is not None else None
-
-    # ----- ROI / units math -----
-    settled_rows = []
-    by_market: dict[str, dict] = {}
+def get_stats() -> dict:
+    init_db()
     with _connect() as conn:
-        for r in conn.execute(
-            "SELECT kind, stat_label, result, odds, units FROM tracked_plays WHERE result IS NOT NULL"
-        ):
-            settled_rows.append(r)
-
-    total_units = 0.0
-    total_staked = 0.0
-    for r in settled_rows:
-        result = r["result"]
-        odds = r["odds"] if r["odds"] is not None else DEFAULT_ODDS
-        stake = r["units"] if r["units"] is not None else 1.0
-        u = units_for(result, odds, stake)
-        total_units += u
-        total_staked += float(stake)
-
-        # Per-market bucket
-        bucket_key = r["stat_label"] or (r["kind"] or "other").title()
-        b = by_market.setdefault(
-            bucket_key,
-            {"market": bucket_key, "wins": 0, "losses": 0, "pushes": 0,
-             "units": 0.0, "staked": 0.0},
-        )
-        b["units"] += u
-        b["staked"] += float(stake)
-        if result == "WIN":
-            b["wins"] += 1
-        elif result == "LOSS":
-            b["losses"] += 1
-        elif result == "PUSH":
-            b["pushes"] += 1
-
-    roi_pct = round((total_units / total_staked) * 100, 1) if total_staked > 0 else None
-
-    # ----- CLV (closing-line value) -----
-    clv_vals: list[float] = []
-    clv_pos = 0
-    with _connect() as conn:
-        for r in conn.execute(
-            "SELECT clv_pp FROM tracked_plays WHERE clv_pp IS NOT NULL"
-        ):
-            try:
-                v = float(r["clv_pp"])
-            except (TypeError, ValueError):
-                continue
-            clv_vals.append(v)
-            if v > 0:
-                clv_pos += 1
-    clv_count = len(clv_vals)
-    avg_clv_pp = round(sum(clv_vals) / clv_count, 2) if clv_count else None
-    clv_beat_pct = round((clv_pos / clv_count) * 100, 1) if clv_count else None
-
-    market_breakdown = []
-    for k, b in by_market.items():
-        decided_b = b["wins"] + b["losses"]
-        wr = round((b["wins"] / decided_b) * 100, 1) if decided_b > 0 else None
-        roi_b = round((b["units"] / b["staked"]) * 100, 1) if b["staked"] > 0 else None
-        market_breakdown.append({
-            "market": b["market"],
-            "wins": b["wins"],
-            "losses": b["losses"],
-            "pushes": b["pushes"],
-            "win_rate": wr,
-            "units": round(b["units"], 2),
-            "roi_pct": roi_b,
-        })
-    market_breakdown.sort(key=lambda m: (-(m["units"] or 0), m["market"]))
-
+        rows = conn.execute(
+            "SELECT result, COUNT(*) as n FROM tracked_plays WHERE result IS NOT NULL GROUP BY result"
+        ).fetchall()
+        open_count = conn.execute(
+            "SELECT COUNT(*) FROM tracked_plays WHERE result IS NULL"
+        ).fetchone()[0]
+    counts = {r["result"]: r["n"] for r in rows}
+    wins = counts.get("WIN", 0)
+    losses = counts.get("LOSS", 0)
+    pushes = counts.get("PUSH", 0)
+    total = wins + losses + pushes
     return {
-        "total": total,
-        "pending": pending,
-        "settled": total - pending,
         "wins": wins,
         "losses": losses,
         "pushes": pushes,
-        "win_rate": win_rate,
-        "avg_pred_prob": avg_pred,
-        "model_wins": model_wins,
-        "model_losses": model_losses,
-        "model_pushes": model_row["pushes"] or 0,
-        "model_win_rate": model_win_rate,
-        "avg_pred_prob_model": avg_pred_model,
-        "total_units": round(total_units, 2),
-        "total_staked": round(total_staked, 2),
-        "roi_pct": roi_pct,
-        "avg_clv_pp": avg_clv_pp,
-        "clv_beat_pct": clv_beat_pct,
-        "clv_count": clv_count,
-        "market_breakdown": market_breakdown,
+        "total_settled": total,
+        "open": open_count,
+        "win_rate": round(wins / total * 100, 1) if total > 0 else None,
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# External Agent Picks
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Agent picks ────────────────────────────────────────────────────────────────
 
 def add_agent_picks(agent_name: str, picks: list, agent_source: str | None = None,
                     raw_payload: dict | None = None) -> dict:
-    """Persist a batch of picks submitted by an external agent.
-
-    Deduplication: one row per (agent_name, game_date). If the agent submits
-    again on the same date, the row is replaced so the page always shows the
-    latest submission.
-    """
     init_db()
-    if not agent_name or not isinstance(picks, list):
-        return {"ok": False, "error": "agent_name and picks list required"}
+    if not agent_name:
+        return {"ok": False, "error": "agent_name required"}
+    now = datetime.utcnow().isoformat()
     today = date.today().isoformat()
-    submitted_at = datetime.utcnow().isoformat(timespec="seconds")
     picks_json = json.dumps(picks)
     raw_json = json.dumps(raw_payload) if raw_payload else None
 
     with _connect() as conn:
-        # Upsert: delete existing row for same agent+date, then insert fresh
         conn.execute(
             "DELETE FROM agent_picks WHERE agent_name=? AND game_date=?",
             (agent_name, today),
         )
-        cur = conn.execute(
-            """
-            INSERT INTO agent_picks (submitted_at, game_date, agent_name, agent_source, picks_json, raw_payload)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (submitted_at, today, agent_name, agent_source, picks_json, raw_json),
+        conn.execute(
+            """INSERT INTO agent_picks (submitted_at, game_date, agent_name, agent_source, picks_json, raw_payload)
+               VALUES (?,?,?,?,?,?)""",
+            (now, today, agent_name, agent_source, picks_json, raw_json),
         )
-        return {"ok": True, "id": cur.lastrowid, "picks_count": len(picks)}
+    return {"ok": True, "agent_name": agent_name, "picks_count": len(picks), "game_date": today}
 
 
 def list_agent_picks(game_date: str | None = None, limit: int = 50) -> list[dict]:
-    """Return stored external agent picks, newest first.
-
-    If game_date is given (YYYY-MM-DD), filter to that date; otherwise return
-    today's submissions only.
-    """
     init_db()
     target_date = game_date or date.today().isoformat()
     with _connect() as conn:
         rows = conn.execute(
-            """
-            SELECT id, submitted_at, game_date, agent_name, agent_source, picks_json
-            FROM agent_picks
-            WHERE game_date = ?
-            ORDER BY submitted_at DESC
-            LIMIT ?
-            """,
+            """SELECT id, submitted_at, game_date, agent_name, agent_source, picks_json
+               FROM agent_picks
+               WHERE game_date = ?
+               ORDER BY submitted_at DESC
+               LIMIT ?""",
             (target_date, limit),
         ).fetchall()
 

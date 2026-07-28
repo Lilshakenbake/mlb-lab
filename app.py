@@ -136,11 +136,34 @@ def login():
     if request.method == "POST":
         password = request.form.get("password", "").strip()
         if password == APP_PASSWORD:
+            import uuid
             session["logged_in"] = True
+            if not session.get("_sid"):
+                session["_sid"] = uuid.uuid4().hex[:16]
             return redirect(url_for("home"))
         error = "Wrong password"
 
     return render_template("login.html", error=error)
+
+
+@app.before_request
+def _count_visit():
+    """Log every authenticated page view for the visitor counter.
+    API calls, static files, and the login page are excluded."""
+    if not session.get("logged_in"):
+        return
+    path = request.path
+    if path.startswith("/static") or path.startswith("/api") or path in ("/login", "/logout"):
+        return
+    sid = session.get("_sid") or None
+    tracker.record_visit(sid)
+
+
+@app.route("/api/stats/visitors")
+@login_required
+def api_visitor_stats():
+    """Return all-time and today's visitor counts."""
+    return jsonify(tracker.get_visit_stats())
 
 
 @app.route("/logout")
@@ -1820,7 +1843,7 @@ def api_one_base_board():
         if p.get("pick") != "OVER":
             continue
         cp = _calibrated_probability(p)
-        if cp < 65.0:
+        if cp < 55.0:
             continue
         rows.append({
             "player": p.get("headline") or p.get("player"),
@@ -1855,7 +1878,7 @@ def hits_combos_page():
 
 
 def _build_hits_combos(pool_picks: list[dict], n_legs: int, n_combos: int,
-                       top_pool: int = 14, max_overlap: int = None):
+                       top_pool: int = 22, max_overlap: int = None):
     """Generate variety-filtered Hits parlay combos.
 
     Pulls from the top `top_pool` Hits OVER picks (one per game already,
@@ -2000,6 +2023,8 @@ def api_bases_board():
         ts = PLAYS_CACHE["ts"]
         computing = PLAYS_CACHE["computing"]
 
+    TOP_PER_GAME = 3   # top 3 TB picks per game instead of 1
+
     by_game: dict = {}
     for p in pool:
         if p.get("stat_label") != "Total Bases":
@@ -2012,25 +2037,26 @@ def api_bases_board():
         cp = _calibrated_probability(p)
         if cp <= 0:
             continue
-        cur = by_game.get(gpk)
-        if cur is None or cp > cur[0]:
-            by_game[gpk] = (cp, p)
+        bucket = by_game.setdefault(gpk, [])
+        bucket.append((cp, p))
 
     rows = []
-    for cp, p in sorted(by_game.values(), key=lambda t: -t[0]):
-        rows.append({
-            "player": p.get("headline"),
-            "stat": p.get("stat_label"),
-            "pick": p.get("pick"),
-            "line": p.get("line"),
-            "projection": p.get("projection"),
-            "probability": round(float(cp), 2),
-            "raw_probability": p.get("probability"),
-            "matchup": p.get("matchup"),
-            "game_pk": p.get("game_pk"),
-            "market_edge_pct": p.get("market_edge_pct"),
-            "model_used": p.get("model_used", False),
-        })
+    for gpk, bucket in by_game.items():
+        bucket.sort(key=lambda t: -t[0])
+        for cp, p in bucket[:TOP_PER_GAME]:
+            rows.append({
+                "player": p.get("headline"),
+                "stat": p.get("stat_label"),
+                "pick": p.get("pick"),
+                "line": p.get("line"),
+                "projection": p.get("projection"),
+                "probability": round(float(cp), 2),
+                "raw_probability": p.get("probability"),
+                "matchup": p.get("matchup"),
+                "game_pk": p.get("game_pk"),
+                "market_edge_pct": p.get("market_edge_pct"),
+                "model_used": p.get("model_used", False),
+            })
 
     return jsonify({
         "ok": True,

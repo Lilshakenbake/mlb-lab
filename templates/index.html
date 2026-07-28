@@ -1147,5 +1147,17 @@ window.__aiPill = function (r) {
 })();
 </script>
 
+
+<!-- Visitor counter -->
+<div id="visitor-counter" style="text-align:center; padding:10px 0 6px; margin-top:18px; border-top:1px solid #2a2218; font-size:11px; color:#5a5550;">
+  <span id="vc-today">—</span> visits today &nbsp;·&nbsp; <span id="vc-total">—</span> all-time
+</div>
+<script>
+fetch('/api/stats/visitors',{credentials:'same-origin'})
+  .then(r=>r.json()).then(d=>{
+    document.getElementById('vc-today').textContent = d.today_total ?? '—';
+    document.getElementById('vc-total').textContent = (d.total_all_time ?? '—').toLocaleString();
+  }).catch(()=>{});
+</script>
 </body>
 </html>
