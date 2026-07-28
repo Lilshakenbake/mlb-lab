@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Predictions · Baked After Dark Sports</title>
+<style>
+    body { background:#060b1a; color:#e8edff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; margin:0; padding:0; }
+    .container { max-width:720px; margin:0 auto; padding:16px; }
+
+    .topnav { display:flex; gap:14px; margin-bottom:12px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:4px; white-space:nowrap; }
+    .topnav a { color:#93c5fd; text-decoration:none; font-weight:600; font-size:13px; flex-shrink:0; }
+    .topnav a:first-child { color:#38bdf8; }
+
+    .brand-bar {
+        text-align:center; padding:14px 0 10px;
+        border-bottom:1px solid #283253; margin-bottom:14px;
+    }
+    .brand-bar .name { font-size:20px; font-weight:800; letter-spacing:.04em; }
+    .brand-bar .sub { font-size:11px; color:#38bdf8; letter-spacing:.14em; text-transform:uppercase; font-weight:600; margin-top:3px; }
+
+    h1 { font-size:22px; font-weight:800; margin:0 0 4px; }
+    .page-sub { color:#8b97bd; font-size:13px; margin:0 0 20px; }
+
+    /* Data summary strip */
+    .data-strip { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px; }
+    .data-chip {
+        background:#131a2e; border:1px solid #283253; border-radius:8px;
+        padding:8px 14px; font-size:12px; color:#8b97bd;
+    }
+    .data-chip span { color:#e8edff; font-weight:700; font-size:15px; display:block; }
+
+    /* Generate button */
+    .gen-btn {
+        display:block; width:100%; padding:14px;
+        background:linear-gradient(135deg,#f472b6,#a78bfa);
+        color:#fff; font-weight:800; font-size:15px; letter-spacing:.04em;
+        border:none; border-radius:12px; cursor:pointer; margin-bottom:24px;
+        transition:opacity .15s;
+    }
+    .gen-btn:hover { opacity:.88; }
+    .gen-btn:disabled { opacity:.45; cursor:not-allowed; }
+
+    /* Status / spinner */
+    #status { text-align:center; color:#8b97bd; font-size:13px; margin:-16px 0 18px; min-height:18px; }
+
+    /* Pick cards */
+    .section-hd { font-size:11px; font-weight:700; color:#64748b; letter-spacing:.08em; text-transform:uppercase; margin:20px 0 8px; }
+
+    .pick-card {
+        background:#131a2e; border:1px solid #283253; border-radius:12px;
+        padding:14px 16px; margin-bottom:10px;
+        display:flex; align-items:flex-start; gap:14px;
+    }
+    .pick-card.high { border-color:#34d399; }
+    .pick-card.mid  { border-color:#fbbf24; }
+    .pick-card.low  { border-color:#475569; }
+
+    .pick-rank {
+        font-size:18px; font-weight:900; color:#f472b6;
+        min-width:28px; text-align:center; padding-top:2px;
+    }
+    .pick-body { flex:1; min-width:0; }
+    .pick-player { font-size:15px; font-weight:700; color:#e8edff; }
+    .pick-line { font-size:13px; color:#38bdf8; font-weight:600; margin:2px 0; }
+    .pick-reason { font-size:12px; color:#8b97bd; line-height:1.5; }
+    .pick-conf {
+        font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px;
+        white-space:nowrap; margin-top:6px; display:inline-block;
+    }
+    .pick-conf.high { background:rgba(52,211,153,.15); color:#34d399; }
+    .pick-conf.mid  { background:rgba(251,191,36,.15); color:#fbbf24; }
+    .pick-conf.low  { background:rgba(71,85,105,.25); color:#94a3b8; }
+
+    /* Analysis block */
+    .analysis-card {
+        background:#0e1628; border:1px solid #283253; border-radius:12px;
+        padding:16px; margin-bottom:10px; font-size:13px; line-height:1.7; color:#cbd5e1;
+    }
+    .analysis-card h3 { font-size:13px; font-weight:700; color:#a78bfa; margin:0 0 8px; }
+
+    /* API info */
+    .api-box {
+        background:#0a1124; border:1px solid #283253; border-radius:10px;
+        padding:14px 16px; margin-top:24px;
+    }
+    .api-box h3 { font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.08em; margin:0 0 8px; }
+    .api-box code { font-size:12px; color:#38bdf8; word-break:break-all; }
+    .api-box p { font-size:12px; color:#8b97bd; margin:6px 0 0; }
+
+    .empty { color:#475569; text-align:center; padding:40px 0; font-size:14px; }
+</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/sleek.css') }}">
+</head>
+<body>
+<div class="container">
+
+    <div class="brand-bar">
+        <div class="name">Baked After Dark</div>
+        <div class="sub">⚾ Sports Analytics</div>
+    </div>
+
+    <div class="topnav">
+        <a href="/">← Slate</a>
+        <a href="/parlay">🎯 Parlay</a>
+        <a href="/challenges">🏆 Challenge</a>
+        <a href="/watchlist">Watchlist</a>
+    </div>
+
+    <h1>🤖 Agent Predictions</h1>
+    <p class="page-sub">AI analysis of tonight's slate — independent picks powered by all model data</p>
+
+    <div class="data-strip" id="data-strip">
+        <div class="data-chip">Loading data…</div>
+    </div>
+
+    <button class="gen-btn" id="gen-btn" onclick="generatePredictions()">
+        ✨ Generate AI Picks
+    </button>
+    <div id="status"></div>
+
+    <div id="results"></div>
+
+    <!-- For external agents -->
+    <div class="api-box">
+        <h3>🔗 For external agents / integrations</h3>
+        <p>Fetch all model data as JSON:</p>
+        <code>GET /api/agent-data</code>
+        <p style="margin-top:8px;">Post your own picks to this page via:</p>
+        <code>POST /api/agent-predictions/submit</code>
+        <p style="margin-top:8px; font-size:11px; color:#475569;">Requires session auth. Pass <code>Authorization: Bearer &lt;token&gt;</code> header for programmatic access.</p>
+    </div>
+
+</div>
+
+<script>
+const status = document.getElementById('status');
+const results = document.getElementById('results');
+const genBtn = document.getElementById('gen-btn');
+
+// Load data summary on page load
+async function loadSummary() {
+    try {
+        const r = await fetch('/api/agent-data', { credentials: 'same-origin' });
+        const d = await r.json();
+        const strip = document.getElementById('data-strip');
+        const plays = d.plays?.length ?? 0;
+        const hr = d.hr_threats?.length ?? 0;
+        const nrfi = d.nrfi?.length ?? 0;
+        const f5 = d.f5?.length ?? 0;
+        const locks = d.locks?.length ?? 0;
+        strip.innerHTML = `
+            <div class="data-chip"><span>${plays}</span>Plays</div>
+            <div class="data-chip"><span>${hr}</span>HR Threats</div>
+            <div class="data-chip"><span>${nrfi}</span>NRFI</div>
+            <div class="data-chip"><span>${f5}</span>F5</div>
+            <div class="data-chip"><span>${locks}</span>Locks</div>
+        `;
+        if (plays === 0 && d.computing) {
+            strip.innerHTML += '<div class="data-chip"><span>⏳</span>Computing…</div>';
+        }
+    } catch(e) {
+        document.getElementById('data-strip').innerHTML = '<div class="data-chip">Could not load data</div>';
+    }
+}
+
+async function generatePredictions() {
+    genBtn.disabled = true;
+    genBtn.textContent = '⏳ Analyzing slate…';
+    status.textContent = 'Fetching model data…';
+    results.innerHTML = '';
+
+    try {
+        const r = await fetch('/api/agent-predictions/generate', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${r.status}`);
+        }
+        const d = await r.json();
+        renderResults(d);
+        status.textContent = `Generated ${new Date().toLocaleTimeString()} · Powered by GPT-4o`;
+    } catch(e) {
+        status.textContent = `Error: ${e.message}`;
+        results.innerHTML = `<div class="empty">Could not generate predictions. Try again in a moment.</div>`;
+    } finally {
+        genBtn.disabled = false;
+        genBtn.textContent = '✨ Generate AI Picks';
+    }
+}
+
+function confClass(c) {
+    if (typeof c === 'string') c = c.toLowerCase();
+    if (c === 'high' || c >= 80) return 'high';
+    if (c === 'medium' || c === 'mid' || c >= 60) return 'mid';
+    return 'low';
+}
+
+function renderResults(d) {
+    let html = '';
+
+    // Top picks
+    if (d.top_picks && d.top_picks.length) {
+        html += '<div class="section-hd">🎯 Top Picks Tonight</div>';
+        d.top_picks.forEach((p, i) => {
+            const cc = confClass(p.confidence);
+            html += `
+            <div class="pick-card ${cc}">
+                <div class="pick-rank">#${i+1}</div>
+                <div class="pick-body">
+                    <div class="pick-player">${esc(p.player)}</div>
+                    <div class="pick-line">${esc(p.pick)} — ${esc(p.matchup || '')}</div>
+                    <div class="pick-reason">${esc(p.reasoning)}</div>
+                    <span class="pick-conf ${cc}">${esc(String(p.confidence).toUpperCase())} CONFIDENCE</span>
+                </div>
+            </div>`;
+        });
+    }
+
+    // Fades
+    if (d.fades && d.fades.length) {
+        html += '<div class="section-hd">🚫 Fades (avoid)</div>';
+        d.fades.forEach(p => {
+            html += `
+            <div class="pick-card low">
+                <div class="pick-rank" style="color:#fb7185;">✗</div>
+                <div class="pick-body">
+                    <div class="pick-player">${esc(p.player)}</div>
+                    <div class="pick-line" style="color:#fb7185;">${esc(p.pick)}</div>
+                    <div class="pick-reason">${esc(p.reasoning)}</div>
+                </div>
+            </div>`;
+        });
+    }
+
+    // Game analysis
+    if (d.game_analysis) {
+        html += '<div class="section-hd">📊 Slate Analysis</div>';
+        html += `<div class="analysis-card"><h3>Overall Read</h3>${esc(d.game_analysis)}</div>`;
+    }
+
+    // Best parlay
+    if (d.best_parlay && d.best_parlay.legs && d.best_parlay.legs.length) {
+        html += '<div class="section-hd">🎯 Agent\'s Best Parlay</div>';
+        html += `<div class="analysis-card"><h3>${d.best_parlay.legs.length}-Leg Parlay</h3>`;
+        d.best_parlay.legs.forEach((l, i) => {
+            html += `<div style="padding:4px 0; border-bottom:1px solid #1e2d4a;">
+                <span style="color:#f472b6; font-weight:700;">#${i+1}</span>
+                <span style="margin-left:8px; font-weight:600;">${esc(l.player)}</span>
+                <span style="color:#38bdf8; margin-left:8px;">${esc(l.pick)}</span>
+            </div>`;
+        });
+        if (d.best_parlay.reasoning) {
+            html += `<div style="margin-top:10px; color:#8b97bd; font-size:12px;">${esc(d.best_parlay.reasoning)}</div>`;
+        }
+        html += '</div>';
+    }
+
+    results.innerHTML = html || '<div class="empty">No predictions returned. Try again.</div>';
+}
+
+function esc(s) {
+    return String(s ?? '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+loadSummary();
+</script>
+</body>
+</html>

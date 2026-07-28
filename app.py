@@ -1272,6 +1272,153 @@ def api_specials():
     return jsonify({"specials": data, "ts": ts, "computing": computing})
 
 
+@app.route("/agent-predictions", methods=["GET"])
+@login_required
+def agent_predictions_page():
+    return render_template("agent_predictions.html")
+
+
+@app.route("/api/agent-data", methods=["GET"])
+@login_required
+def api_agent_data():
+    """Full data snapshot for external agents — plays, HR threats, NRFI, F5, locks, HRR combos."""
+    _ensure_plays_refresh()
+    with _PLAYS_LOCK:
+        plays = list(PLAYS_CACHE["data"])
+        hr_threats = list(HR_THREATS_CACHE["data"])
+        nrfi = list(NRFI_CACHE["data"])
+        f5 = list(F5_CACHE["data"])
+        locks = list(LOCKS_CACHE["data"])
+        hrr_combos = list(HRR_COMBO_CACHE["data"])
+        computing = PLAYS_CACHE["computing"]
+        ts = PLAYS_CACHE["ts"]
+    return jsonify({
+        "plays": plays,
+        "hr_threats": hr_threats,
+        "nrfi": nrfi,
+        "f5": f5,
+        "locks": locks,
+        "hrr_combos": hrr_combos,
+        "computing": computing,
+        "ts": ts,
+        "data_source": "Baked After Dark Sports Analytics",
+    })
+
+
+@app.route("/api/agent-predictions/generate", methods=["POST"])
+@login_required
+def api_agent_predictions_generate():
+    """Run GPT-4o over tonight's full data set and return structured picks."""
+    import json as _json
+    try:
+        import openai
+    except ImportError:
+        return jsonify({"error": "openai package not installed"}), 500
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        return jsonify({"error": "OPENAI_API_KEY not configured"}), 500
+
+    # Gather all data
+    _ensure_plays_refresh()
+    with _PLAYS_LOCK:
+        plays = list(PLAYS_CACHE["data"])
+        hr_threats = list(HR_THREATS_CACHE["data"])
+        nrfi = list(NRFI_CACHE["data"])
+        f5 = list(F5_CACHE["data"])
+        locks = list(LOCKS_CACHE["data"])
+        hrr_combos = list(HRR_COMBO_CACHE["data"])
+
+    if not plays and not hr_threats:
+        return jsonify({"error": "No data available yet — cache still computing. Try in 60 seconds."}), 503
+
+    # Compact summary for the prompt
+    def _play_summary(p):
+        return {
+            "player": p.get("player"),
+            "stat": p.get("stat_type"),
+            "pick": p.get("pick"),
+            "probability": round(p.get("probability", 0), 1),
+            "edge": p.get("market_edge_pct"),
+            "matchup": p.get("matchup"),
+            "lineup_confirmed": p.get("lineup_confirmed"),
+        }
+
+    def _hr_summary(h):
+        return {
+            "player": h.get("player"),
+            "hr_prob": round(h.get("probability", 0), 1),
+            "matchup": h.get("matchup"),
+        }
+
+    def _nrfi_summary(n):
+        return {
+            "game": f"{n.get('away_team')} @ {n.get('home_team')}",
+            "nrfi_prob": round(n.get("probability", 0), 1),
+            "lean": n.get("lean"),
+        }
+
+    data_snapshot = {
+        "top_plays": [_play_summary(p) for p in plays[:20]],
+        "hr_threats_top10": [_hr_summary(h) for h in hr_threats[:10]],
+        "nrfi_top5": [_nrfi_summary(n) for n in nrfi[:5]],
+        "locks": [_play_summary(p) for p in locks[:3]],
+    }
+
+    system_prompt = (
+        "You are a sharp MLB sports betting analyst for Baked After Dark Sports Analytics. "
+        "You receive a data snapshot from a machine-learning model that scores tonight's MLB slate. "
+        "Your job is to synthesize the model data, identify the highest-conviction plays, "
+        "flag any plays to avoid (fades), write a brief slate overview, and build one best parlay. "
+        "Be concise, confident, and data-driven. Do not hedge excessively. "
+        "Output ONLY valid JSON with this exact shape:\n"
+        "{\n"
+        '  "top_picks": [ { "player": "", "pick": "", "matchup": "", "confidence": "High|Medium|Low", "reasoning": "" }, ... ],\n'
+        '  "fades": [ { "player": "", "pick": "", "reasoning": "" }, ... ],\n'
+        '  "game_analysis": "2-3 sentence overall slate read",\n'
+        '  "best_parlay": { "legs": [ { "player": "", "pick": "" }, ... ], "reasoning": "" }\n'
+        "}\n"
+        "top_picks: 5-7 picks ranked by conviction. fades: 2-3 plays the model lists but you would avoid. "
+        "best_parlay: 3-4 legs, pick the most correlated / highest-edge combination."
+    )
+
+    user_prompt = (
+        f"Tonight's MLB data snapshot:\n{_json.dumps(data_snapshot, indent=2)}\n\n"
+        "Analyze this and return your structured picks JSON."
+    )
+
+    try:
+        client = openai.OpenAI(api_key=openai_key)
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.4,
+            response_format={"type": "json_object"},
+            timeout=45,
+        )
+        raw = resp.choices[0].message.content
+        result = _json.loads(raw)
+        return jsonify(result)
+    except openai.AuthenticationError:
+        return jsonify({"error": "OpenAI API key invalid"}), 500
+    except openai.RateLimitError:
+        return jsonify({"error": "OpenAI rate limit hit — try in a moment"}), 429
+    except Exception as e:
+        return jsonify({"error": f"OpenAI call failed: {e}"}), 500
+
+
+@app.route("/api/agent-predictions/submit", methods=["POST"])
+@login_required
+def api_agent_predictions_submit():
+    """External agents can POST their own picks here for display."""
+    data = request.get_json(silent=True) or {}
+    # For now just echo back — future: persist picks to tracker
+    return jsonify({"status": "received", "picks_count": len(data.get("picks", []))})
+
+
 @app.route("/admin/warm-cache", methods=["GET", "POST"])
 @login_required
 def admin_warm_cache():
