@@ -108,6 +108,6 @@ data_cache/*/
 !data_cache/pitcher_profile/
 !data_cache/player_id/
 !data_cache/roster/
-!data_cache/schedule/
+# schedule cache is transient runtime state — not versioned
 !data_cache/weather/
 tracked_data/
